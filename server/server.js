@@ -60,52 +60,89 @@ const SEED = [
 ];
 
 /* ----------------------------------------------------------- bootstrap */
-function ensureData() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(USERS_FILE)) {
-    const users = SEED.map((u) => ({
-      username: u.username, role: u.role, name: u.name,
-      passwordHash: bcrypt.hashSync(u.password, 10),
-      status: "active",            // active | pending | disabled
-      tfaEnabled: false, tfaSecret: null,
-      createdAt: new Date().toISOString(),
-    }));
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-    console.log("[seed] data/users.json dibuat dengan 5 akun default.");
-  }
+/* Penyimpanan akun bisa pakai Upstash Redis (gratis, persisten — untuk hosting
+   free seperti Render yang filesystem-nya ephemeral) ATAU file lokal data/users.json.
+   Mode Redis aktif bila env UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN diisi. */
+const REDIS_URL = (process.env.UPSTASH_REDIS_REST_URL || "").replace(/\/$/, "");
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
+const REDIS_KEY = "ktd:users";
+let USERS = [];
+
+function ensureDir() { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); }
+function seedUsers() {
+  return SEED.map((u) => ({
+    username: u.username, role: u.role, name: u.name,
+    passwordHash: bcrypt.hashSync(u.password, 10),
+    status: "active",              // active | pending | disabled
+    tfaEnabled: false, tfaSecret: null,
+    createdAt: new Date().toISOString(),
+  }));
 }
-function getSecret() {
-  if (process.env.JWT_SECRET) return process.env.JWT_SECRET; // disuntik via env (Railway)
-  if (!fs.existsSync(SECRET_FILE)) {
-    fs.writeFileSync(SECRET_FILE, crypto.randomBytes(48).toString("hex"));
-    console.log("[seed] data/.jwt-secret dibuat.");
-  }
-  return fs.readFileSync(SECRET_FILE, "utf8").trim();
-}
-const loadUsers = () => JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
-const saveUsers = (u) => fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2));
 // upgrade skema akun lama (sebelum kolom status/2FA ada) tanpa mengubah kredensial
-function migrateUsers() {
-  if (!fs.existsSync(USERS_FILE)) return;
-  const users = loadUsers();
+function applyMigrations(users) {
   let changed = false;
   for (const u of users) {
     if (u.status === undefined) { u.status = "active"; changed = true; }
     if (u.tfaEnabled === undefined) { u.tfaEnabled = false; changed = true; }
     if (u.tfaSecret === undefined) { u.tfaSecret = null; changed = true; }
   }
-  if (changed) { saveUsers(users); console.log("[migrate] users.json di-upgrade ke skema status/2FA."); }
+  return changed;
+}
+
+async function redisGet(key) {
+  const r = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+  if (!r.ok) throw new Error("Redis GET " + r.status);
+  return (await r.json()).result; // string | null
+}
+async function redisSet(key, value) {
+  const r = await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}`, { method: "POST", headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, body: value });
+  if (!r.ok) throw new Error("Redis SET " + r.status);
+}
+
+async function initStore() {
+  if (USE_REDIS) {
+    let raw = null;
+    try { raw = await redisGet(REDIS_KEY); } catch (e) { console.warn("[store] Redis GET gagal:", e.message); }
+    if (raw) { USERS = JSON.parse(raw); if (applyMigrations(USERS)) await redisSet(REDIS_KEY, JSON.stringify(USERS)); }
+    else { USERS = seedUsers(); await redisSet(REDIS_KEY, JSON.stringify(USERS)); console.log("[store] seed 5 akun ditulis ke Redis."); }
+    console.log("[store] memakai Upstash Redis (persisten).");
+  } else {
+    ensureDir();
+    if (fs.existsSync(USERS_FILE)) { USERS = JSON.parse(fs.readFileSync(USERS_FILE, "utf8")); }
+    else { USERS = seedUsers(); fs.writeFileSync(USERS_FILE, JSON.stringify(USERS, null, 2)); console.log("[seed] data/users.json dibuat dengan 5 akun default."); }
+    if (applyMigrations(USERS)) fs.writeFileSync(USERS_FILE, JSON.stringify(USERS, null, 2));
+    console.log("[store] memakai file lokal data/users.json.");
+  }
+}
+
+function getSecret() {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET; // disuntik via env (disarankan di produksi)
+  ensureDir();
+  if (!fs.existsSync(SECRET_FILE)) {
+    fs.writeFileSync(SECRET_FILE, crypto.randomBytes(48).toString("hex"));
+    console.log("[seed] data/.jwt-secret dibuat.");
+  }
+  return fs.readFileSync(SECRET_FILE, "utf8").trim();
+}
+
+const loadUsers = () => USERS; // baca dari cache in-memory
+async function saveUsers(u) {
+  USERS = u;
+  if (USE_REDIS) { try { await redisSet(REDIS_KEY, JSON.stringify(u)); } catch (e) { console.error("[store] Redis SET gagal:", e.message); throw e; } }
+  else { ensureDir(); fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2)); }
 }
 const findUser = (users, username) =>
   users.find((u) => u.username.toLowerCase() === String(username).toLowerCase().trim());
 // data yang aman dikirim ke klien (tanpa hash/secret)
 const publicUser = (u) => ({ username: u.username, role: u.role, name: u.name, status: u.status, tfaEnabled: !!u.tfaEnabled });
 
-ensureData();
-migrateUsers();
 const SECRET = getSecret();
 if (IS_PROD && !process.env.JWT_SECRET) {
-  console.warn("[warn] NODE_ENV=production tetapi JWT_SECRET belum di-set sebagai env — memakai data/.jwt-secret (pastikan persisten).");
+  console.warn("[warn] NODE_ENV=production tetapi JWT_SECRET belum di-set sebagai env — pakai data/.jwt-secret (akan rotasi jika filesystem ephemeral!). Set JWT_SECRET.");
+}
+if (IS_PROD && !USE_REDIS) {
+  console.warn("[warn] Produksi tanpa Upstash Redis — akun disimpan di file (bisa hilang saat redeploy di host gratis). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN.");
 }
 
 /* ---- optional Google Drive integration (tambah dokumen per role) ---- */
@@ -192,7 +229,7 @@ const authLimiter = rateLimit({
 });
 
 /* ----------------------------------------------------------- REGISTER */
-app.post("/api/register", authLimiter, (req, res) => {
+app.post("/api/register", authLimiter, async (req, res) => {
   const { username, password, name } = req.body || {};
   if (!username || !password || !name) return res.status(400).json({ error: "Nama, username, dan password wajib diisi" });
   if (String(username).trim().length < 3) return res.status(400).json({ error: "Username minimal 3 karakter" });
@@ -207,7 +244,7 @@ app.post("/api/register", authLimiter, (req, res) => {
     tfaEnabled: false, tfaSecret: null,
     createdAt: new Date().toISOString(),
   });
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan akun" }); }
   res.status(201).json({ ok: true, message: "Akun dibuat. Menunggu persetujuan Owner sebelum bisa login." });
 });
 
@@ -259,7 +296,7 @@ app.post("/api/tfa/setup", requireAuth, async (req, res) => {
   if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
   const secret = speakeasy.generateSecret({ name: `${APP_NAME} (${user.username})`, length: 20 });
   user.tfaPendingSecret = secret.base32; // belum aktif sampai diverifikasi
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   try {
     const qr = await QRCode.toDataURL(secret.otpauth_url);
     res.json({ qr, secret: secret.base32 }); // secret base32 untuk entri manual di authenticator
@@ -267,7 +304,7 @@ app.post("/api/tfa/setup", requireAuth, async (req, res) => {
     res.json({ qr: null, secret: secret.base32 });
   }
 });
-app.post("/api/tfa/enable", requireAuth, (req, res) => {
+app.post("/api/tfa/enable", requireAuth, async (req, res) => {
   const { token } = req.body || {};
   const users = loadUsers();
   const user = findUser(users, req.user.username);
@@ -275,10 +312,10 @@ app.post("/api/tfa/enable", requireAuth, (req, res) => {
   const ok = speakeasy.totp.verify({ secret: user.tfaPendingSecret, encoding: "base32", token: String(token || "").trim(), window: 1 });
   if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
   user.tfaSecret = user.tfaPendingSecret; user.tfaEnabled = true; delete user.tfaPendingSecret;
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true, tfaEnabled: true });
 });
-app.post("/api/tfa/disable", requireAuth, (req, res) => {
+app.post("/api/tfa/disable", requireAuth, async (req, res) => {
   const { token } = req.body || {};
   const users = loadUsers();
   const user = findUser(users, req.user.username);
@@ -286,7 +323,7 @@ app.post("/api/tfa/disable", requireAuth, (req, res) => {
   const ok = speakeasy.totp.verify({ secret: user.tfaSecret, encoding: "base32", token: String(token || "").trim(), window: 1 });
   if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
   user.tfaEnabled = false; user.tfaSecret = null; delete user.tfaPendingSecret;
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true, tfaEnabled: false });
 });
 
@@ -294,24 +331,24 @@ app.post("/api/tfa/disable", requireAuth, (req, res) => {
 app.get("/api/users", requireAuth, requireOwner, (_req, res) => {
   res.json(loadUsers().map(publicUser));
 });
-app.post("/api/users/approve", requireAuth, requireOwner, (req, res) => {
+app.post("/api/users/approve", requireAuth, requireOwner, async (req, res) => {
   const { username, role } = req.body || {};
   if (!ROLES.includes(role)) return res.status(400).json({ error: "Role tidak valid" });
   const users = loadUsers();
   const user = findUser(users, username);
   if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
   user.role = role; user.status = "active";
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true, user: publicUser(user) });
 });
-app.post("/api/users/disable", requireAuth, requireOwner, (req, res) => {
+app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
   const { username } = req.body || {};
   const users = loadUsers();
   const user = findUser(users, username);
   if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
   if (user.username === req.user.username) return res.status(400).json({ error: "Tidak bisa menonaktifkan akun sendiri" });
   user.status = "disabled";
-  saveUsers(users);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true, user: publicUser(user) });
 });
 
@@ -350,4 +387,6 @@ app.get("/api/sheets", requireAuth, async (_req, res) => {
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"] }));
 app.get("*", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 
-app.listen(PORT, () => console.log(`${APP_NAME} dashboard → http://localhost:${PORT}  (${IS_PROD ? "production" : "development"})`));
+initStore()
+  .then(() => app.listen(PORT, () => console.log(`${APP_NAME} dashboard → http://localhost:${PORT}  (${IS_PROD ? "production" : "development"})`)))
+  .catch((e) => { console.error("Gagal inisialisasi penyimpanan akun:", e.message); process.exit(1); });

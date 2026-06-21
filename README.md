@@ -80,19 +80,39 @@ Tombol **+** memanggil `POST /api/documents` → membuat Google Sheet/Doc baru d
 3. Salin `data/drive-config.example.json` → `data/drive-config.json`, isi ID folder tiap role.
 4. Restart. Log: `[drive] Google Drive integration AKTIF`.
 
-## Deploy ke Railway
+## Penyimpanan akun: file lokal atau Upstash Redis
 
-Railway mendukung Node.js persisten (cocok untuk backend ini; Netlify/Vercel tidak, karena serverless + filesystem ephemeral).
+Server menyimpan akun (termasuk 2FA) di salah satu dari:
+- **File lokal** `data/users.json` — default untuk jalan di komputer.
+- **Upstash Redis** — aktif bila env `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` diisi. Wajib untuk hosting gratis (filesystem-nya ephemeral) agar akun tidak hilang saat redeploy.
 
-1. Push repo ini ke GitHub.
-2. Di [railway.app](https://railway.app): **New Project → Deploy from GitHub repo** → pilih repo ini. Railway memakai `railway.json` / `Procfile` (`node server/server.js`).
-3. **Variables** (Settings → Variables):
-   - `NODE_ENV=production`  → mengaktifkan cookie `secure`.
-   - `JWT_SECRET=<string acak panjang>`  → kunci JWT yang persisten antar-deploy.
-   - `DATA_DIR=/data`  → arahkan ke volume persisten (lihat langkah 4).
-   - `PORT` di-set otomatis oleh Railway (server sudah membaca `process.env.PORT`).
-4. **Volume** (penting agar akun & 2FA tidak hilang saat redeploy): Settings → **Volumes** → mount di `/data`. Server menyimpan `users.json`, `.jwt-secret`, dan config di sini.
-5. Upload kredensial Google (opsional, untuk data live & Drive): taruh `service-account.json`, `sheets-config.json`, `drive-config.json` di volume `/data`, atau biarkan kosong (snapshot fallback tetap jalan).
-6. Generate domain publik di Settings → **Networking → Generate Domain**.
+## Deploy GRATIS (Render + Upstash Redis) — tanpa kartu kredit
 
-> File rahasia (`users.json`, `.jwt-secret`, `*-config.json`, `service-account.json`) **di-ignore git** — jangan pernah di-commit. Di produksi, `JWT_SECRET` via env lebih aman daripada file.
+Pilihan **$0/bulan**: Render free menjalankan server Express, Upstash Redis menyimpan akun secara persisten. (Netlify/Vercel tidak cocok — serverless + ephemeral; Railway = trial credit lalu berbayar.)
+
+**1. Upstash Redis (gratis):**
+   - Daftar di [upstash.com](https://upstash.com) → **Create Database** (Redis, pilih region terdekat mis. Singapore).
+   - Di tab **REST API**, salin **`UPSTASH_REDIS_REST_URL`** dan **`UPSTASH_REDIS_REST_TOKEN`**.
+
+**2. Render (gratis):**
+   - Daftar di [render.com](https://render.com) → **New → Web Service** → connect repo GitHub `Dashboardv2`.
+   - Render membaca `render.yaml` (plan free, `node server/server.js`). Atau set manual: Build `npm install`, Start `node server/server.js`.
+   - **Environment** → tambahkan:
+     - `NODE_ENV` = `production`
+     - `JWT_SECRET` = string acak panjang (atau biarkan `render.yaml` generate)
+     - `UPSTASH_REDIS_REST_URL` = (dari Upstash)
+     - `UPSTASH_REDIS_REST_TOKEN` = (dari Upstash)
+   - `PORT` di-set otomatis oleh Render.
+   - Create Web Service → tunggu deploy → dapat URL publik `https://...onrender.com`.
+
+> Catatan free tier Render: layanan "tidur" setelah ~15 menit idle, bangun lagi ~30–60 dtk saat diakses. Akun tetap aman karena tersimpan di Upstash.
+
+**3. (Opsional) data live & Drive:** set env `service-account.json` belum didukung via env — untuk data live di host gratis, paling praktis tetap pakai snapshot bawaan, atau gunakan host dengan disk. Tanpa konfigurasi, dashboard jalan normal dengan snapshot.
+
+## Deploy ke Railway (alternatif berbayar setelah trial)
+
+1. [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway memakai `railway.json` / `Procfile`.
+2. **Variables**: `NODE_ENV=production`, `JWT_SECRET=<acak>`, `DATA_DIR=/data` (+ **Volume** mount di `/data` agar `users.json`/`.jwt-secret` persisten). `PORT` otomatis.
+3. Generate domain di **Networking**.
+
+> File rahasia (`users.json`, `.jwt-secret`, `*-config.json`, `service-account.json`) **di-ignore git** — jangan pernah di-commit. Di produksi, `JWT_SECRET` via env wajib (jangan andalkan file).

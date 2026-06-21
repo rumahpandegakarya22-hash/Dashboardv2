@@ -1,0 +1,18 @@
+# Render Blueprint — deploy gratis (free web service).
+# Akun & 2FA disimpan di Upstash Redis (gratis) agar persisten meski filesystem ephemeral.
+services:
+  - type: web
+    name: kost-tiga-dara
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true          # Render generate otomatis & persisten
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false                  # isi manual dari dashboard Upstash
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false                  # isi manual dari dashboard Upstash
