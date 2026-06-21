@@ -63,8 +63,9 @@ const SEED = [
 /* Penyimpanan akun bisa pakai Upstash Redis (gratis, persisten — untuk hosting
    free seperti Render yang filesystem-nya ephemeral) ATAU file lokal data/users.json.
    Mode Redis aktif bila env UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN diisi. */
-const REDIS_URL = (process.env.UPSTASH_REDIS_REST_URL || "").replace(/\/$/, "");
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+// Terima beberapa konvensi nama (manual Upstash ATAU integrasi Vercel/KV otomatis)
+const REDIS_URL = (process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_URL || "").replace(/\/$/, "");
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_TOKEN || "";
 const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
 const REDIS_KEY = "ktd:users";
 
@@ -401,10 +402,11 @@ app.get("/api/health", async (_req, res) => {
     nodeEnv: process.env.NODE_ENV || null,
     hasJwtEnv: !!process.env.JWT_SECRET,
     redisConfigured: USE_REDIS,
-    // diagnosa nama env (TANPA value) untuk mendeteksi typo nama variabel
-    envKeysWithUpstash: Object.keys(process.env).filter((k) => /upstash/i.test(k)),
-    urlLen: (process.env.UPSTASH_REDIS_REST_URL || "").length,
-    tokenLen: (process.env.UPSTASH_REDIS_REST_TOKEN || "").length,
+    // diagnosa nama env (TANPA value) untuk mendeteksi nama/scope/project yang salah
+    storageEnvKeys: Object.keys(process.env).filter((k) => /upstash|redis|kv_/i.test(k)),
+    totalEnvKeys: Object.keys(process.env).length,
+    urlLen: REDIS_URL.length,
+    tokenLen: REDIS_TOKEN.length,
   };
   if (USE_REDIS) {
     try { await redisGet("ktd:health"); out.redisOk = true; }
