@@ -401,6 +401,10 @@ app.get("/api/health", async (_req, res) => {
     nodeEnv: process.env.NODE_ENV || null,
     hasJwtEnv: !!process.env.JWT_SECRET,
     redisConfigured: USE_REDIS,
+    // diagnosa nama env (TANPA value) untuk mendeteksi typo nama variabel
+    envKeysWithUpstash: Object.keys(process.env).filter((k) => /upstash/i.test(k)),
+    urlLen: (process.env.UPSTASH_REDIS_REST_URL || "").length,
+    tokenLen: (process.env.UPSTASH_REDIS_REST_TOKEN || "").length,
   };
   if (USE_REDIS) {
     try { await redisGet("ktd:health"); out.redisOk = true; }
