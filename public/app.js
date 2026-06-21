@@ -879,6 +879,16 @@
       </section>`;
     }
 
+    function renderPassword() {
+      return `<section class="sec-card">
+        <h3>Ganti Password</h3>
+        <div class="login-field"><label>Password lama</label><input class="login-input" id="pwOld" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+        <div class="login-field"><label>Password baru (min. 8 karakter)</label><input class="login-input" id="pwNew" type="password" autocomplete="new-password" placeholder="••••••••"></div>
+        <button class="login-btn login-btn--sm" id="pwBtn">Simpan Password</button>
+        <p class="sec-msg" id="pwMsg" hidden></p>
+      </section>`;
+    }
+
     async function renderOwnerUsers() {
       if (cur.role !== "owner") return "";
       let users = [];
@@ -899,7 +909,18 @@
     }
 
     async function paint() {
-      body.innerHTML = renderTfa() + (await renderOwnerUsers());
+      body.innerHTML = renderTfa() + renderPassword() + (await renderOwnerUsers());
+      // ganti password
+      body.querySelector("#pwBtn")?.addEventListener("click", async () => {
+        const msg = body.querySelector("#pwMsg");
+        const oldPassword = body.querySelector("#pwOld").value, newPassword = body.querySelector("#pwNew").value;
+        msg.hidden = true; msg.style.color = "";
+        const r = await fetch("/api/password", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ oldPassword, newPassword }) });
+        const d = await r.json();
+        if (!r.ok) { msg.textContent = d.error || "Gagal"; msg.hidden = false; return; }
+        msg.textContent = "Password berhasil diganti."; msg.style.color = "var(--green)"; msg.hidden = false;
+        body.querySelector("#pwOld").value = ""; body.querySelector("#pwNew").value = "";
+      });
       // 2FA: setup
       body.querySelector("#tfaSetupBtn")?.addEventListener("click", async (e) => {
         e.target.disabled = true;

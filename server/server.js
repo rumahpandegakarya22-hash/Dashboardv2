@@ -50,14 +50,24 @@ const TFA_TICKET_TTL = "5m"; // jendela untuk memasukkan OTP saat login
 const ROLES = ["owner", "admin", "marketing", "operasional", "sales"];
 const APP_NAME = "Kost Tiga Dara";
 
-/* ---- default accounts (only used to seed users.json on first boot) ---- */
+/* ---- akun bawaan (hanya untuk seed pertama kali) ----
+   TIDAK ada password hardcoded. Password diambil dari env (mis. OWNER_PASSWORD),
+   atau di-generate ACAK saat seed dan dicetak sekali ke log server. */
 const SEED = [
-  { username: "owner",       password: "owner123", role: "owner",       name: "Owner" },
-  { username: "admin",       password: "admin123", role: "admin",       name: "Admin & Keuangan" },
-  { username: "marketing",   password: "mkt123",   role: "marketing",   name: "Marketing" },
-  { username: "operasional", password: "ops123",   role: "operasional", name: "Operasional" },
-  { username: "sales",       password: "sales123", role: "sales",       name: "Sales" },
+  { username: "owner",       role: "owner",       name: "Owner" },
+  { username: "admin",       role: "admin",       name: "Admin & Keuangan" },
+  { username: "marketing",   role: "marketing",   name: "Marketing" },
+  { username: "operasional", role: "operasional", name: "Operasional" },
+  { username: "sales",       role: "sales",       name: "Sales" },
 ];
+// password seed: dari env <ROLE>_PASSWORD bila ada; jika tidak, acak (dicetak sekali)
+function seedPassword(role) {
+  const fromEnv = process.env[`${role.toUpperCase()}_PASSWORD`];
+  if (fromEnv) return fromEnv;
+  const gen = crypto.randomBytes(9).toString("base64url");
+  console.log(`[seed] password "${role}" di-generate acak (GANTI segera / set env ${role.toUpperCase()}_PASSWORD): ${gen}`);
+  return gen;
+}
 
 /* ----------------------------------------------------------- bootstrap */
 /* Penyimpanan akun bisa pakai Upstash Redis (gratis, persisten — untuk hosting
@@ -73,7 +83,7 @@ function ensureDir() { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { re
 function seedUsers() {
   return SEED.map((u) => ({
     username: u.username, role: u.role, name: u.name,
-    passwordHash: bcrypt.hashSync(u.password, 10),
+    passwordHash: bcrypt.hashSync(seedPassword(u.role), 10),
     status: "active",              // active | pending | disabled
     tfaEnabled: false, tfaSecret: null,
     createdAt: new Date().toISOString(),
@@ -334,6 +344,22 @@ app.post("/api/tfa/disable", requireAuth, async (req, res) => {
   user.tfaEnabled = false; user.tfaSecret = null; delete user.tfaPendingSecret;
   try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true, tfaEnabled: false });
+});
+
+/* ----------------------------------------------------------- ganti password */
+app.post("/api/password", requireAuth, async (req, res) => {
+  const { oldPassword, newPassword } = req.body || {};
+  if (!oldPassword || !newPassword) return res.status(400).json({ error: "Password lama & baru wajib diisi" });
+  if (String(newPassword).length < 8) return res.status(400).json({ error: "Password baru minimal 8 karakter" });
+  let users;
+  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
+  const user = findUser(users, req.user.username);
+  if (!user || !bcrypt.compareSync(String(oldPassword), user.passwordHash)) {
+    return res.status(401).json({ error: "Password lama salah" });
+  }
+  user.passwordHash = bcrypt.hashSync(String(newPassword), 10);
+  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
+  res.json({ ok: true });
 });
 
 /* ----------------------------------------------------------- owner: kelola akun */

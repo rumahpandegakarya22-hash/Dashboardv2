@@ -14,17 +14,16 @@ Saat pertama kali dijalankan, server otomatis membuat:
 - `data/users.json` — 5 akun default (password ter-hash bcrypt)
 - `data/.jwt-secret` — kunci penandatangan JWT (jangan dibagikan)
 
-## Akun demo
+## Akun bawaan & password (TIDAK ada password di repo)
 
-| Username      | Password   | Role        | Akses                        |
-| ------------- | ---------- | ----------- | ---------------------------- |
-| `owner`       | `owner123` | owner       | **semua divisi**             |
-| `admin`       | `admin123` | admin       | Admin & Keuangan saja        |
-| `marketing`   | `mkt123`   | marketing   | Marketing saja               |
-| `operasional` | `ops123`   | operasional | Operasional saja             |
-| `sales`       | `sales123` | sales       | Sales saja                   |
+Saat pertama kali dijalankan, server membuat 5 akun: `owner`, `admin`, `marketing`, `operasional`, `sales`. **Password TIDAK di-hardcode di kode.** Untuk tiap akun, password diambil dari:
 
-> **Ganti password default sebelum produksi.** Hapus `data/users.json` lalu ubah `SEED` di `server/server.js` dan restart, atau ganti `passwordHash` (hash bcrypt) langsung.
+1. **Env `<ROLE>_PASSWORD`** bila ada — mis. `OWNER_PASSWORD`, `ADMIN_PASSWORD`, `MARKETING_PASSWORD`, `OPERASIONAL_PASSWORD`, `SALES_PASSWORD`.
+2. Jika env tidak diisi → password **di-generate acak** dan **dicetak sekali ke log server** (lihat log Vercel/terminal: `[seed] password "owner" ... : xxxx`).
+
+Cara aman: set `OWNER_PASSWORD` (dll.) di env sebelum boot pertama, **atau** login dengan password acak dari log lalu ganti via menu **Akun & Keamanan → Ganti Password**. Role selain owner juga bisa lewat **registrasi → disetujui owner**.
+
+> Ganti password kapan saja lewat tombol gembok di sidebar → **Ganti Password** (endpoint `POST /api/password`).
 
 ## Keamanan & alur auth
 
