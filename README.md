@@ -86,7 +86,25 @@ Server menyimpan akun (termasuk 2FA) di salah satu dari:
 - **File lokal** `data/users.json` — default untuk jalan di komputer.
 - **Upstash Redis** — aktif bila env `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` diisi. Wajib untuk hosting gratis (filesystem-nya ephemeral) agar akun tidak hilang saat redeploy.
 
-## Deploy GRATIS (Render + Upstash Redis) — tanpa kartu kredit
+## Deploy GRATIS #1 (Vercel + Upstash Redis) — TANPA kartu kredit ⭐
+
+Pilihan **$0/bulan, tanpa kartu sama sekali**, dan **tanpa batasan desain UI/UX** (front-end custom disajikan apa adanya). Express berjalan sebagai serverless function (`api/index.js`), akun disimpan di Upstash Redis. File `vercel.json` sudah disiapkan.
+
+**1. Upstash Redis (gratis, tanpa kartu):** seperti langkah di bawah — salin `UPSTASH_REDIS_REST_URL` & `UPSTASH_REDIS_REST_TOKEN`.
+
+**2. Vercel (gratis, tanpa kartu):**
+   - Daftar di [vercel.com](https://vercel.com) dengan GitHub.
+   - **Add New → Project** → import repo `Dashboardv2` → **Deploy**.
+   - **Settings → Environment Variables** → tambahkan lalu **Redeploy**:
+     - `JWT_SECRET` = string acak panjang **(WAJIB — filesystem Vercel read-only)**
+     - `UPSTASH_REDIS_REST_URL` = dari Upstash
+     - `UPSTASH_REDIS_REST_TOKEN` = dari Upstash
+     - `NODE_ENV` = `production`
+   - Dapat URL `https://<proyek>.vercel.app`.
+
+> Di Vercel, akun **wajib** disimpan di Upstash (FS ephemeral) dan `JWT_SECRET` **wajib** via env. Tanpa keduanya, login tidak persisten.
+
+## Deploy GRATIS #2 (Render + Upstash Redis)
 
 Pilihan **$0/bulan**: Render free menjalankan server Express, Upstash Redis menyimpan akun secara persisten. (Netlify/Vercel tidak cocok — serverless + ephemeral; Railway = trial credit lalu berbayar.)
 
