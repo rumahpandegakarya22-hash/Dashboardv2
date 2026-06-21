@@ -394,6 +394,23 @@ app.get("/api/sheets", requireAuth, async (_req, res) => {
   }
 });
 
+/* ---- GET /api/health  → diagnosa konfigurasi (tanpa membocorkan rahasia) ---- */
+app.get("/api/health", async (_req, res) => {
+  const out = {
+    ok: true,
+    nodeEnv: process.env.NODE_ENV || null,
+    hasJwtEnv: !!process.env.JWT_SECRET,
+    redisConfigured: USE_REDIS,
+  };
+  if (USE_REDIS) {
+    try { await redisGet("ktd:health"); out.redisOk = true; }
+    catch (e) { out.redisOk = false; out.redisError = e.message; }
+  } else {
+    out.note = "Upstash belum dikonfigurasi — server pakai file (gagal di FS read-only seperti Vercel). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN lalu redeploy.";
+  }
+  res.json(out);
+});
+
 /* ---- static front-end (only /public is exposed) ---- */
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"] }));
 app.get("*", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
