@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="id" class="">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kost Management · Dashboard</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50:  '#eef0ff',
+              100: '#e0e3ff',
+              200: '#c7ccff',
+              300: '#a5acff',
+              400: '#8086ff',
+              500: '#5e6ad2', // Linear-ish accent
+              600: '#4f59c4',
+              700: '#414aa8',
+              800: '#363d85',
+              900: '#2f356b',
+            },
+          },
+          keyframes: {
+            'fade-up': {
+              '0%':   { opacity: '0', transform: 'translateY(8px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+          },
+          animation: {
+            'fade-up': 'fade-up .5s cubic-bezier(.22,.61,.36,1) both',
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Inter font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root { color-scheme: light dark; }
+    * { -webkit-font-smoothing: antialiased; }
+    html { scroll-behavior: smooth; }
+    body { font-feature-settings: "cv11", "ss01"; letter-spacing: -0.01em; }
+
+    /* Thin, refined scrollbar */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(120,120,130,.25); border-radius: 9999px; border: 3px solid transparent; background-clip: padding-box; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(120,120,130,.45); background-clip: padding-box; }
+
+    /* Smooth view transitions */
+    .view { animation: viewIn .45s cubic-bezier(.22,.61,.36,1) both; }
+    @keyframes viewIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Stagger helper */
+    [data-stagger] > * { opacity: 0; animation: viewIn .5s cubic-bezier(.22,.61,.36,1) forwards; }
+
+    /* Nav active indicator */
+    .nav-link { position: relative; }
+    .nav-link.active::before {
+      content: ""; position: absolute; left: -8px; top: 50%; transform: translateY(-50%);
+      width: 3px; height: 18px; border-radius: 9999px; background: #5e6ad2;
+    }
+
+    /* Animated count-up number tabular */
+    .tnum { font-variant-numeric: tabular-nums; }
+
+    /* Donut stroke animation */
+    .donut-ring { transition: stroke-dashoffset 1.2s cubic-bezier(.22,.61,.36,1); }
+
+    /* Bar grow animation handled via inline style + transition */
+    .bar { transition: height 1s cubic-bezier(.22,.61,.36,1); }
+
+    [x-cloak] { display: none !important; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+  </style>
+</head>
+
+<body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100 font-sans antialiased">
+
+  <!-- ============ LAYOUT ============ -->
+  <div class="flex min-h-screen">
+
+    <!-- ============ SIDEBAR ============ -->
+    <aside id="sidebar"
+      class="fixed inset-y-0 left-0 z-40 w-64 -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-out
+             border-r border-neutral-200/80 dark:border-neutral-800/80 bg-white/90 dark:bg-neutral-900/90 backdrop-blur-xl flex flex-col">
+
+      <!-- Brand -->
+      <div class="h-16 flex items-center gap-2.5 px-5 border-b border-neutral-200/70 dark:border-neutral-800/70">
+        <div class="h-8 w-8 rounded-lg bg-brand-500 text-white grid place-items-center shadow-sm shadow-brand-500/30">
+          <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="height:18px;width:18px">
+            <path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/>
+          </svg>
+        </div>
+        <div class="leading-tight">
+          <p class="text-[13px] font-semibold tracking-tight">KostHub</p>
+          <p class="text-[11px] text-neutral-400">Management Suite</p>
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-6">
+        <div>
+          <p class="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">Menu</p>
+          <ul class="space-y-0.5" id="nav-list">
+            <li><a href="#" data-view="dashboard" class="nav-link active group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-900 dark:text-neutral-100 bg-neutral-100 dark:bg-neutral-800/70">
+              <svg class="h-4 w-4 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+              Dashboard</a></li>
+            <li><a href="#" data-view="rooms" class="nav-link group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V7l9-4 9 4v14"/><path d="M3 21h18"/><path d="M9 21v-6h6v6"/><path d="M9 10h.01M15 10h.01"/></svg>
+              Kamar</a></li>
+            <li><a href="#" data-view="tenants" class="nav-link group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Penyewa</a></li>
+            <li><a href="#" data-view="payments" class="nav-link group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+              Pembayaran
+              <span class="ml-auto text-[10px] font-semibold text-amber-600 bg-amber-100 dark:bg-amber-500/15 dark:text-amber-400 rounded-full px-1.5 py-0.5">3</span></a></li>
+            <li><a href="#" data-view="reports" class="nav-link group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+              Laporan</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <p class="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">Lainnya</p>
+          <ul class="space-y-0.5">
+            <li><a href="#" data-view="settings" class="nav-link group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              Pengaturan</a></li>
+          </ul>
+        </div>
+      </nav>
+
+      <!-- Upgrade card -->
+      <div class="p-3">
+        <div class="rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-gradient-to-br from-brand-500/[0.07] to-transparent p-3.5">
+          <p class="text-[12px] font-semibold">Paket Pro</p>
+          <p class="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400 leading-relaxed">Kelola hingga 100 kamar & laporan otomatis.</p>
+          <button class="mt-2.5 w-full rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[12px] font-medium py-1.5 transition-colors">Upgrade</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Sidebar overlay (mobile) -->
+    <div id="sidebar-overlay" class="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm opacity-0 pointer-events-none transition-opacity duration-300 lg:hidden"></div>
+
+    <!-- ============ MAIN ============ -->
+    <div class="flex-1 lg:pl-64 min-w-0">
+
+      <!-- Topbar -->
+      <header class="sticky top-0 z-20 h-16 border-b border-neutral-200/70 dark:border-neutral-800/70 bg-neutral-50/80 dark:bg-neutral-950/80 backdrop-blur-xl">
+        <div class="h-full px-4 sm:px-6 lg:px-8 flex items-center gap-3">
+          <button id="menu-btn" class="lg:hidden -ml-1 p-2 rounded-lg hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors" aria-label="Buka menu">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+
+          <div>
+            <h1 id="page-title" class="text-[15px] font-semibold tracking-tight">Dashboard</h1>
+            <p id="page-sub" class="text-[11.5px] text-neutral-400 hidden sm:block">Ringkasan operasional kost Anda hari ini</p>
+          </div>
+
+          <!-- Search -->
+          <div class="ml-auto hidden md:flex items-center">
+            <div class="relative">
+              <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" placeholder="Cari kamar, penyewa…"
+                class="w-64 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 pl-9 pr-12 py-2 text-[13px] placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/50 transition" />
+              <kbd class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-neutral-400 border border-neutral-200 dark:border-neutral-700 rounded px-1.5 py-0.5">⌘K</kbd>
+            </div>
+          </div>
+
+          <!-- Theme toggle -->
+          <button id="theme-btn" class="p-2 rounded-lg hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors md:ml-2" aria-label="Ganti tema">
+            <svg id="icon-sun" class="h-5 w-5 hidden dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            <svg id="icon-moon" class="h-5 w-5 block dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
+          </button>
+
+          <!-- Notifications -->
+          <button class="relative p-2 rounded-lg hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors" aria-label="Notifikasi">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            <span class="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-neutral-50 dark:ring-neutral-950"></span>
+          </button>
+
+          <!-- Profile -->
+          <button class="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors">
+            <span class="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 grid place-items-center text-white text-[11px] font-semibold">RP</span>
+            <span class="hidden sm:block text-[13px] font-medium">Rumah Pandega</span>
+            <svg class="hidden sm:block h-4 w-4 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- ============ VIEWS ============ -->
+      <main class="px-4 sm:px-6 lg:px-8 py-6 max-w-[1400px] mx-auto">
+
+        <!-- ===== DASHBOARD VIEW ===== -->
+        <section data-view-panel="dashboard" class="view">
+
+          <!-- Stat cards -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4" data-stagger>
+            <!-- card -->
+            <div class="group rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 hover:shadow-lg hover:shadow-neutral-900/5 dark:hover:border-neutral-700 transition-all duration-300">
+              <div class="flex items-center justify-between">
+                <span class="h-9 w-9 rounded-lg bg-brand-500/10 text-brand-500 grid place-items-center"><svg class="h-4.5 w-4.5" style="height:18px;width:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V7l9-4 9 4v14"/><path d="M3 21h18"/></svg></span>
+                <span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 rounded-full px-2 py-0.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>+4</span>
+              </div>
+              <p class="mt-4 text-[12px] text-neutral-500">Total Kamar</p>
+              <p class="mt-0.5 text-2xl font-semibold tnum" data-count="48">0</p>
+            </div>
+            <div class="group rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 hover:shadow-lg hover:shadow-neutral-900/5 dark:hover:border-neutral-700 transition-all duration-300">
+              <div class="flex items-center justify-between">
+                <span class="h-9 w-9 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 grid place-items-center"><svg class="h-4.5 w-4.5" style="height:18px;width:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 rounded-full px-2 py-0.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>87%</span>
+              </div>
+              <p class="mt-4 text-[12px] text-neutral-500">Kamar Terisi</p>
+              <p class="mt-0.5 text-2xl font-semibold tnum" data-count="42">0</p>
+            </div>
+            <div class="group rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 hover:shadow-lg hover:shadow-neutral-900/5 dark:hover:border-neutral-700 transition-all duration-300">
+              <div class="flex items-center justify-between">
+                <span class="h-9 w-9 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 grid place-items-center"><svg class="h-4.5 w-4.5" style="height:18px;width:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg></span>
+                <span class="inline-flex items-center gap-1 text-[11px] font-medium text-rose-600 bg-rose-50 dark:bg-rose-500/10 dark:text-rose-400 rounded-full px-2 py-0.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>-2</span>
+              </div>
+              <p class="mt-4 text-[12px] text-neutral-500">Kamar Kosong</p>
+              <p class="mt-0.5 text-2xl font-semibold tnum" data-count="6">0</p>
+            </div>
+            <div class="group rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 hover:shadow-lg hover:shadow-neutral-900/5 dark:hover:border-neutral-700 transition-all duration-300">
+              <div class="flex items-center justify-between">
+                <span class="h-9 w-9 rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400 grid place-items-center"><svg class="h-4.5 w-4.5" style="height:18px;width:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+                <span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 rounded-full px-2 py-0.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>+12%</span>
+              </div>
+              <p class="mt-4 text-[12px] text-neutral-500">Pendapatan Bulan Ini</p>
+              <p class="mt-0.5 text-2xl font-semibold tnum">Rp <span data-count="63500000" data-format="rb">0</span></p>
+            </div>
+          </div>
+
+          <!-- Charts row -->
+          <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- Revenue chart -->
+            <div class="lg:col-span-2 rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
+              <div class="flex items-start justify-between flex-wrap gap-3">
+                <div>
+                  <h3 class="text-[14px] font-semibold">Pendapatan</h3>
+                  <p class="text-[12px] text-neutral-400">6 bulan terakhir</p>
+                </div>
+                <div class="flex items-center gap-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 p-0.5 text-[12px]">
+                  <button class="seg-btn px-2.5 py-1 rounded-md font-medium bg-white dark:bg-neutral-700 shadow-sm">6B</button>
+                  <button class="seg-btn px-2.5 py-1 rounded-md font-medium text-neutral-500">1T</button>
+                  <button class="seg-btn px-2.5 py-1 rounded-md font-medium text-neutral-500">1Th</button>
+                </div>
+              </div>
+              <!-- SVG Bar chart -->
+              <div class="mt-6" id="revenue-chart"></div>
+            </div>
+
+            <!-- Occupancy donut -->
+            <div class="rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
+              <h3 class="text-[14px] font-semibold">Tingkat Hunian</h3>
+              <p class="text-[12px] text-neutral-400">Distribusi status kamar</p>
+              <div class="mt-3 flex items-center justify-center" id="occupancy-donut"></div>
+              <div class="mt-2 space-y-2.5">
+                <div class="flex items-center justify-between text-[12.5px]">
+                  <span class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-brand-500"></span>Terisi</span>
+                  <span class="font-medium tnum">42</span>
+                </div>
+                <div class="flex items-center justify-between text-[12.5px]">
+                  <span class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span>Kosong</span>
+                  <span class="font-medium tnum">6</span>
+                </div>
+                <div class="flex items-center justify-between text-[12.5px]">
+                  <span class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-neutral-300 dark:bg-neutral-600"></span>Perbaikan</span>
+                  <span class="font-medium tnum">2</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom row: recent payments + reminders -->
+          <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- Recent payments table -->
+            <div class="lg:col-span-2 rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+              <div class="flex items-center justify-between px-5 py-4 border-b border-neutral-200/70 dark:border-neutral-800/70">
+                <h3 class="text-[14px] font-semibold">Pembayaran Terbaru</h3>
+                <a href="#" data-view="payments" class="text-[12px] font-medium text-brand-500 hover:text-brand-600 transition-colors">Lihat semua →</a>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-[13px]">
+                  <thead>
+                    <tr class="text-left text-[11px] uppercase tracking-wider text-neutral-400 border-b border-neutral-200/70 dark:border-neutral-800/70">
+                      <th class="font-medium px-5 py-2.5">Penyewa</th>
+                      <th class="font-medium px-5 py-2.5">Kamar</th>
+                      <th class="font-medium px-5 py-2.5">Jumlah</th>
+                      <th class="font-medium px-5 py-2.5">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recent-payments" class="divide-y divide-neutral-100 dark:divide-neutral-800/60"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Reminders / activity -->
+            <div class="rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
+              <h3 class="text-[14px] font-semibold">Jatuh Tempo</h3>
+              <p class="text-[12px] text-neutral-400">Tagihan yang perlu ditagih</p>
+              <ul class="mt-4 space-y-3" id="reminders"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== ROOMS VIEW ===== -->
+        <section data-view-panel="rooms" class="view hidden">
+          <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <div class="flex items-center gap-2 rounded-lg bg-neutral-100 dark:bg-neutral-800 p-0.5 text-[12.5px]" id="room-filter">
+              <button data-filter="all"      class="filter-btn px-3 py-1.5 rounded-md font-medium bg-white dark:bg-neutral-700 shadow-sm">Semua</button>
+              <button data-filter="occupied" class="filter-btn px-3 py-1.5 rounded-md font-medium text-neutral-500">Terisi</button>
+              <button data-filter="vacant"   class="filter-btn px-3 py-1.5 rounded-md font-medium text-neutral-500">Kosong</button>
+              <button data-filter="maintenance" class="filter-btn px-3 py-1.5 rounded-md font-medium text-neutral-500">Perbaikan</button>
+            </div>
+            <button class="inline-flex items-center gap-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[13px] font-medium px-3.5 py-2 transition-colors">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Tambah Kamar
+            </button>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" id="rooms-grid"></div>
+        </section>
+
+        <!-- ===== TENANTS VIEW ===== -->
+        <section data-view-panel="tenants" class="view hidden">
+          <div class="rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-neutral-200/70 dark:border-neutral-800/70 flex-wrap gap-3">
+              <h3 class="text-[14px] font-semibold">Daftar Penyewa</h3>
+              <div class="relative">
+                <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input id="tenant-search" type="text" placeholder="Cari penyewa…" class="w-56 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 pl-9 pr-3 py-1.5 text-[13px] placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-brand-500/40 transition" />
+              </div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-[13px]">
+                <thead>
+                  <tr class="text-left text-[11px] uppercase tracking-wider text-neutral-400 border-b border-neutral-200/70 dark:border-neutral-800/70">
+                    <th class="font-medium px-5 py-2.5">Nama</th>
+                    <th class="font-medium px-5 py-2.5">Kamar</th>
+                    <th class="font-medium px-5 py-2.5">Kontak</th>
+                    <th class="font-medium px-5 py-2.5">Mulai Sewa</th>
+                    <th class="font-medium px-5 py-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="tenants-table" class="divide-y divide-neutral-100 dark:divide-neutral-800/60"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== PAYMENTS VIEW ===== -->
+        <section data-view-panel="payments" class="view hidden">
+          <div class="rounded-xl border border-neutral-200/80 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+            <div class="px-5 py-4 border-b border-neutral-200/70 dark:border-neutral-800/70">
+              <h3 class="text-[14px] font-semibold">Riwayat Pembayaran</h3>
+              <p class="text-[12px] text-neutral-400">Semua transaksi sewa</p>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-[13px]">
+                <thead>
+                  <tr class="text-left text-[11px] uppercase tracking-wider text-neutral-400 border-b border-neutral-200/70 dark:border-neutral-800/70">
+                    <th class="font-medium px-5 py-2.5">Penyewa</th>
+                    <th class="font-medium px-5 py-2.5">Kamar</th>
+                    <th class="font-medium px-5 py-2.5">Periode</th>
+                    <th class="font-medium px-5 py-2.5">Jumlah</th>
+                    <th class="font-medium px-5 py-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="payments-table" class="divide-y divide-neutral-100 dark:divide-neutral-800/60"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== GENERIC PLACEHOLDER (reports/settings) ===== -->
+        <section data-view-panel="reports" class="view hidden">
+          <div class="rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-16 text-center">
+            <div class="mx-auto h-12 w-12 rounded-xl bg-brand-500/10 text-brand-500 grid place-items-center"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></div>
+            <h3 class="mt-4 text-[15px] font-semibold">Laporan</h3>
+            <p class="mt-1 text-[13px] text-neutral-400 max-w-sm mx-auto">Modul laporan keuangan & okupansi akan tampil di sini. Bagian ini siap dihubungkan ke data nyata.</p>
+          </div>
+        </section>
+        <section data-view-panel="settings" class="view hidden">
+          <div class="rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-16 text-center">
+            <div class="mx-auto h-12 w-12 rounded-xl bg-brand-500/10 text-brand-500 grid place-items-center"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+            <h3 class="mt-4 text-[15px] font-semibold">Pengaturan</h3>
+            <p class="mt-1 text-[13px] text-neutral-400 max-w-sm mx-auto">Atur profil kost, metode pembayaran, dan preferensi notifikasi di sini.</p>
+          </div>
+        </section>
+
+        <footer class="mt-8 text-center text-[11px] text-neutral-400">
+          KostHub · Dibangun dengan HTML, Tailwind & Vanilla JS · UI ref: Linear / Notion / Vercel
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 translate-y-4 opacity-0 pointer-events-none transition-all duration-300 z-50">
+    <div class="rounded-lg bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[13px] font-medium px-4 py-2.5 shadow-xl flex items-center gap-2">
+      <svg class="h-4 w-4 text-emerald-400 dark:text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      <span id="toast-msg">Tersimpan</span>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+node_modules/
+
+# Rahasia & kredensial — JANGAN di-commit
+data/.jwt-secret
+data/users.json
+data/drive-config.json
+data/sheets-config.json
+data/service-account.json
+
+*.log
