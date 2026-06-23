@@ -1183,25 +1183,24 @@
     const ci = { tgl: idx("tanggal"), debit: idx("akun debit", "debit"), kredit: idx("akun kredit", "kredit"), nominal: idx("nominal"), ket: idx("keterangan") };
     if (ci.tgl < 0 || ci.nominal < 0 || ci.debit < 0 || ci.kredit < 0) return [];
     const isKas = (s) => KAS_ACCOUNTS.includes(String(s || "").trim().toLowerCase());
-    // Akun pendapatan riil (bukan "Pendapatan Diterima di Muka" yang liabilitas)
-    const isPendapatan = (s) => { const t = String(s || "").trim().toLowerCase(); if (t.includes("diterima di muka")) return false; return t.startsWith("pendapatan") || t === "denda" || t === "tambahan listrik" || t.includes("laba penjualan"); };
+    // Akun pendapatan (termasuk "Pendapatan Diterima di Muka") → sisi pemasukan
+    const isPendapatan = (s) => { const t = String(s || "").trim().toLowerCase(); return t.startsWith("pendapatan") || t === "denda" || t === "tambahan listrik" || t.includes("laba penjualan"); };
     const isBeban = (s) => { const t = String(s || "").trim().toLowerCase(); return t.startsWith("beban") || t.startsWith("utilitas"); };
     const toNum = (s) => { const n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
     const out = [];
+    // Format akuntansi (double-entry): tampilkan SEMUA entri jurnal, klasifikasi per baris.
     rows.slice(1).forEach(r => {
       const tgl = String(r[ci.tgl] || "").trim();
       const nominal = toNum(r[ci.nominal]);
       if (!tgl || !nominal) return;
       const debit = r[ci.debit], kredit = r[ci.kredit];
       const ket = String(r[ci.ket] || "").trim();
-      // Lewati pengakuan/spreading bulanan ("Pengakuan sewa bln-N") — duplikat dari penerimaan kas
-      if (/pengakuan/i.test(ket)) return;
       let jenis = null;
-      if (isKas(debit) && !isKas(kredit)) jenis = "Pemasukan";        // kas masuk
-      else if (isKas(kredit) && !isKas(debit)) jenis = "Pengeluaran"; // kas keluar
-      else if (isPendapatan(kredit)) jenis = "Pemasukan";            // pendapatan diakui tanpa baris kas (mis. Sewa Kamar Delinda)
-      else if (isBeban(debit)) jenis = "Pengeluaran";                // beban diakui tanpa baris kas
-      else return; // mutasi neraca murni (mis. kas↔deposit) → bukan pembayaran
+      if (isPendapatan(kredit)) jenis = "Pemasukan";                 // akun pendapatan dikredit → pemasukan
+      else if (isBeban(debit)) jenis = "Pengeluaran";                // akun beban didebit → pengeluaran
+      else if (isKas(debit) && !isKas(kredit)) jenis = "Pemasukan";  // fallback: kas masuk
+      else if (isKas(kredit) && !isKas(debit)) jenis = "Pengeluaran";// fallback: kas keluar
+      else return; // mutasi neraca murni (mis. kas↔deposit) → bukan pemasukan/pengeluaran
       const namaTx = ket || (jenis === "Pemasukan" ? String(kredit) : String(debit));
       // enrich keterangan: nomor kamar + DP/Pelunasan/Sewa untuk pendapatan sewa
       let extra = "";
@@ -1220,6 +1219,11 @@
         jenisTx: jenis === "Pemasukan" ? { t: "Pemasukan", c: "s-complete" } : { t: "Pengeluaran", c: "s-pending" },
         namaTx, jumlah: "Rp" + nominal.toLocaleString("id-ID"), keterangan: extra,
       });
+    });
+    // Urutkan kronologis berdasarkan tanggal (entri lama → baru)
+    out.sort((a, b) => {
+      const da = parseDate(a.tanggal), db = parseDate(b.tanggal);
+      return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
     });
     return out;
   }
