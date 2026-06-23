@@ -225,7 +225,8 @@
       };
     });
   }
-  recomputeFromPenghuni();
+  // NB: recomputeFromPenghuni() memanggil parseDate (butuh MONTHS_ID, dideklarasikan
+  // di bawah). Panggilan awal dipindah ke setelah parseDate siap (cari INIT_RECOMPUTE).
 
   // Daftar Survey / Prospek (Log Survey/Booking) + kolom Pertimbangan + aksi WA
   const PERTIMBANGAN = ["Harga sedikit mahal", "Kamar mandi luar", "Lokasi strategis", "Fasilitas lengkap", "Masih bandingkan"];
@@ -374,6 +375,9 @@
       return true;
     });
   }
+
+  // INIT_RECOMPUTE: panggilan awal — di sini parseDate & MONTHS_ID sudah terdefinisi
+  recomputeFromPenghuni();
 
   const DATE_KEYS = new Set(["tanggal","masuk","tempo","deadline","kategori"]);
   function table(cfg) {
