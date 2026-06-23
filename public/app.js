@@ -177,6 +177,7 @@
   let LOGBOOK = [];
   let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
   let FINANCE = null; // ringkasan keuangan dari kolom "Dampak Laba" di 3_KEUANGAN
+  let TIKET = null, BOOKING = null; // tiket (maintenance) & booking dari tab live
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -231,7 +232,7 @@
 
   // Daftar Survey / Prospek (Log Survey/Booking) + kolom Pertimbangan + aksi WA
   const PERTIMBANGAN = ["Harga sedikit mahal", "Kamar mandi luar", "Lokasi strategis", "Fasilitas lengkap", "Masih bandingkan"];
-  const SURVEY = [
+  let SURVEY = [
     { tanggal:"11 Jan 2026", nama:"Dewi Kusuma",  wa:"085678901234", asal:"Referral",  kamar:"3, 1" },
     { tanggal:"12 Jan 2026", nama:"Rian Pratama", wa:"087654321098", asal:"Instagram", kamar:"2" },
     { tanggal:"14 Jan 2026", nama:"Ahmad Fauzi",  wa:"082345678901", asal:"Google",    kamar:"3" },
@@ -241,7 +242,7 @@
 
   // Daftar Leads
   const LEAD_STATUS = [{t:"Leads",c:"s-leads"},{t:"Follow Up",c:"s-followup"}];
-  const LEADS = SURVEY.map((s, i) => ({ ...s, id:"LD-"+String(i+1).padStart(3,"0"), status: LEAD_STATUS[i % 2] }));
+  let LEADS = SURVEY.map((s, i) => ({ ...s, id:"LD-"+String(i+1).padStart(3,"0"), status: LEAD_STATUS[i % 2] }));
 
   // Daftar Vendor — Hasil dropdown + WA
   const VENDOR = [
@@ -538,36 +539,50 @@
   }
 
   function marketingOverview() {
+    const nLeads = LEADS.length, nSurvey = SURVEY.length;
+    const konv = nLeads ? Math.round((nSurvey / nLeads) * 100) : 0;
     const cards = [
-      { label:"Leads", value:"1000", badge:"15%", dir:"down", bg:G.mkLeads, seed:1 },
-      { label:"Survey", value:"800", badge:"15%", dir:"down", bg:G.mkSurvey, seed:2, onDark:true },
-      { label:"Konversi Leads-Survey", value:"80 %", badge:"15%", dir:"down", bg:G.mkConv, seed:3 },
-      { label:"Unit Tersewa", value:"29", badge:"15%", dir:"down", bg:G.mkUnit, seed:4 },
+      { label:"Leads", value:String(nLeads), badge:"15%", dir:"down", bg:G.mkLeads, seed:1 },
+      { label:"Survey", value:String(nSurvey), badge:"15%", dir:"down", bg:G.mkSurvey, seed:2, onDark:true },
+      { label:"Konversi Leads-Survey", value:konv+" %", badge:"15%", dir:"down", bg:G.mkConv, seed:3 },
+      { label:"Unit Tersewa", value:String(STATS.occupied ?? 0), badge:"15%", dir:"down", bg:G.mkUnit, seed:4 },
       { label:"CAC", value:"500 rb", badge:"15%", dir:"up", bg:G.mkCac, seed:5 },
     ];
-    const channelDonut = [{t:"Instagram",value:30,c:PAL.marketing[0]},{t:"Tiktok",value:25,c:PAL.marketing[1]},{t:"WhatsApp",value:28,c:PAL.marketing[2]},{t:"Referral",value:17,c:PAL.marketing[3]}];
+    // Komposisi channel dari kolom Asal/Sumber leads
+    const chMap = {}; LEADS.forEach(l => { const a = l.asal || "Lainnya"; chMap[a] = (chMap[a] || 0) + 1; });
+    const chTop = Object.entries(chMap).sort((a,b)=>b[1]-a[1]).slice(0,4);
+    const channelDonut = chTop.length ? chTop.map((e,i)=>({t:e[0],value:e[1],c:PAL.marketing[i%4]})) : [{t:"Instagram",value:30,c:PAL.marketing[0]},{t:"Tiktok",value:25,c:PAL.marketing[1]},{t:"WhatsApp",value:28,c:PAL.marketing[2]},{t:"Referral",value:17,c:PAL.marketing[3]}];
+    const chCats = chTop.length ? chTop.map(e=>e[0]) : ["Instagram","Tiktok","WhatsApp","Referral"];
+    const chVals = chTop.length ? chTop.map(e=>e[1]) : [12,16,22,18];
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
-        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:140},{value:86},{value:50}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>140</b></div><div><span>Survey / Viewing</span><b>86</b></div></div></div>`, [{t:"Leads",c:"#9a8a78"},{t:"Survey",c:"#d8c8b0"}])}
+        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:Math.max(1,Math.round(nSurvey*0.6))}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey / Viewing</span><b>${nSurvey}</b></div></div></div>`, [{t:"Leads",c:"#9a8a78"},{t:"Survey",c:"#d8c8b0"}])}
         ${donutBlock("Komposisi Leads Channel", channelDonut, "Total Leads")}
-        ${chartCard("Leads Channel", barChart(["Instagram","Tiktok","WhatsApp","Referral"],[12,16,22,18],"gMk1",barStopsWarm,["0","10K","20K"]), [{t:"Jumlah Leads",c:"#e26d6d"}])}
+        ${chartCard("Leads Channel", barChart(chCats,chVals,"gMk1",barStopsWarm,["0","10K","20K"]), [{t:"Jumlah Leads",c:"#e26d6d"}])}
       </div>
       ${table({ title:"DAFTAR FOLLOW UP", cols:COLS.leads, data:LEADS.slice(0,4) })}</div>`;
   }
 
   function opsOverview() {
+    const T = TIKET && TIKET.length ? TIKET : null;
+    const nPrev = T ? T.filter(x=>x.jenis==="Preventif").length : 20;
+    const nKor = T ? T.filter(x=>x.jenis==="Korektif").length : 5;
+    const totalTiket = nPrev + nKor;
+    const cost = T ? T.reduce((s,x)=>s+(x._biaya||0),0) : null;
+    const defect = totalTiket ? Math.round((nKor/totalTiket)*100) : 0;
     const top = [
-      { label:"Tiket Preventif", value:"20", badge:"15%", dir:"down", bg:G.opRed, seed:1, onDark:true },
-      { label:"Tiket Korektif", value:"5", badge:"15%", dir:"down", bg:G.opOrange, seed:2, onDark:true },
-      { label:"Defect Rate", value:"5 %", badge:"15%", dir:"down", bg:G.opTeal, seed:3 },
+      { label:"Tiket Preventif", value:String(nPrev), badge:"15%", dir:"down", bg:G.opRed, seed:1, onDark:true },
+      { label:"Tiket Korektif", value:String(nKor), badge:"15%", dir:"down", bg:G.opOrange, seed:2, onDark:true },
+      { label:"Defect Rate", value:(T?defect:5)+" %", badge:"15%", dir:"down", bg:G.opTeal, seed:3 },
       { label:"Downtime", value:"1 h", badge:"15%", dir:"down", bg:G.opAmber, seed:4 },
-      { label:"Cost", value:"159.2 Jt", badge:"15%", dir:"down", bg:G.opGreen, seed:5 },
+      { label:"Cost", value:cost!=null?fmtRpShort(cost):"159.2 Jt", badge:"15%", dir:"down", bg:G.opGreen, seed:5 },
     ];
     const mid = [
       { label:"Response Time", value:"30 min", badge:"15%", dir:"down", bg:G.opOrange, seed:6, onDark:true },
       { label:"Resolution Time", value:"10 h", badge:"15%", dir:"down", bg:G.opRed, seed:7, onDark:true },
     ];
-    const tiketDonut = [{t:"Preventif",value:20,c:PAL.operasional[0]},{t:"Korektif",value:5,c:PAL.operasional[1]},{t:"Inspeksi",value:8,c:PAL.operasional[2]}];
+    const nInspeksi = LOGBOOK.length ? LOGBOOK.filter(r=>r.divisi==="Inspeksi").length : 8;
+    const tiketDonut = [{t:"Preventif",value:nPrev,c:PAL.operasional[0]},{t:"Korektif",value:nKor,c:PAL.operasional[1]},{t:"Inspeksi",value:nInspeksi,c:PAL.operasional[2]}];
     return `<div class="view">${statGrid(top,5)}
       <div class="grid row-3 mt" style="grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,1fr))">
         ${chartCard("Expense Category", barChart(["Listrik","Air","Perbaikan","Perawatan"],[15,22,18,12],"gOp1",barStopsWarm,["0","10K","20K","30K"]), [{t:"Beban (Rp)",c:"#e58a6f"}])}
@@ -578,7 +593,7 @@
         ${statCard({ label:"SLA", value:"99 %", badge:"15%", dir:"down", bg:G.opTeal2, seed:9 })}
         ${donutBlock("Komposisi Kategori Tiket", tiketDonut, "Total Tiket")}
       </div>
-      ${table({ title:"STATUS TIKET", cols:COLS.tiket, data:tiketRows(4) })}</div>`;
+      ${table({ title:"STATUS TIKET", cols:COLS.tiket, data:(TIKET && TIKET.length ? TIKET.slice(0,4) : tiketRows(4)) })}</div>`;
   }
 
   function ownerOverview() {
@@ -610,18 +625,27 @@
   }
 
   function salesOverview() {
+    const B = BOOKING && BOOKING.length ? BOOKING : null;
+    const nLeads = LEADS.length, nSurvey = SURVEY.length;
+    const nBooking = B ? B.length : 25;
+    const nCancel = B ? B.filter(x=>/batal|cancel/i.test(x.status || "")).length : 0;
+    const cancelRate = nBooking ? Math.round((nCancel / nBooking) * 100) : 0;
+    const convRate = nLeads ? ((nBooking / nLeads) * 100).toFixed(1).replace(".", ",") : "0";
+    const durs = B ? B.map(x=>parseInt(String(x.durasi).replace(/[^0-9]/g,""),10)).filter(n=>n>0) : [];
+    const avgDur = durs.length ? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length) : 9;
     const cards = [
-      { label:"Booking", value:"25", badge:"15%", dir:"down", bg:G.salePink, seed:1 },
-      { label:"Cancellation Rate", value:"5 %", badge:"15%", dir:"down", bg:G.saleRed, seed:2 },
-      { label:"Conversion Rate", value:"2,5 %", badge:"15%", dir:"down", bg:G.saleGold, seed:3 },
-      { label:"Retention Rate", value:"98 %", badge:"15%", dir:"down", bg:G.salePeach, seed:4 },
-      { label:"AVG Durasi Sewa", value:"9 bln", badge:"15%", dir:"down", bg:G.salePink, seed:5 },
-      { label:"Kamar Isi", value:"28", badge:"15%", dir:"down", bg:G.saleGold, seed:6 },
+      { label:"Booking", value:String(nBooking), badge:"15%", dir:"down", bg:G.salePink, seed:1 },
+      { label:"Cancellation Rate", value:(B?cancelRate:5)+" %", badge:"15%", dir:"down", bg:G.saleRed, seed:2 },
+      { label:"Conversion Rate", value:(B?convRate:"2,5")+" %", badge:"15%", dir:"down", bg:G.saleGold, seed:3 },
+      { label:"Retention Rate", value:"98 %", badge:"15%", dir:"down", bg:G.salePeach, seed:4 }, // dummy: butuh Tgl Keluar
+      { label:"AVG Durasi Sewa", value:avgDur+" bln", badge:"15%", dir:"down", bg:G.salePink, seed:5 },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"15%", dir:"down", bg:G.saleGold, seed:6 },
     ];
-    const prospekDonut = [{t:"Leads",value:140,c:PAL.sales[0]},{t:"Booking",value:41,c:PAL.sales[1]},{t:"Cancel",value:14,c:PAL.sales[2]}];
+    const prospekDonut = B ? [{t:"Leads",value:nLeads||1,c:PAL.sales[0]},{t:"Booking",value:nBooking,c:PAL.sales[1]},{t:"Cancel",value:nCancel,c:PAL.sales[2]}] : [{t:"Leads",value:140,c:PAL.sales[0]},{t:"Booking",value:41,c:PAL.sales[1]},{t:"Cancel",value:14,c:PAL.sales[2]}];
+    const kontrak = STATS.occupied || 0;
     return `<div class="view">${statGrid(cards,6)}
       <div class="grid row-3 mt">
-        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:140},{value:86},{value:41},{value:28}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>140</b></div><div><span>Survey</span><b>86</b></div><div><span>Booking</span><b>41</b></div><div><span>Kontrak</span><b>28</b></div></div></div>`, [{t:"Leads",c:"#7a6f63"},{t:"Survey",c:"#9a8a78"},{t:"Booking",c:"#b8a890"},{t:"Kontrak",c:"#d8c8b0"}])}
+        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:nBooking||1},{value:kontrak||1}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey</span><b>${nSurvey}</b></div><div><span>Booking</span><b>${nBooking}</b></div><div><span>Kontrak</span><b>${kontrak}</b></div></div></div>`, [{t:"Leads",c:"#7a6f63"},{t:"Survey",c:"#9a8a78"},{t:"Booking",c:"#b8a890"},{t:"Kontrak",c:"#d8c8b0"}])}
         ${donutBlock("Komposisi Prospek", prospekDonut, "Total Prospek")}
         ${chartCard("Kategori Prospek", barChart(["Instagram","TikTok","WhatsApp","Referral","Walk-in"],[14,20,24,16,8],"gSale1",barStopsWarm,["0","10","20","30"]), [{t:"Jumlah Prospek",c:"#e58a6f"}])}
       </div>
@@ -657,7 +681,7 @@
       label:"Operasional", sidebarName:"Operasional",
       pages: [
         { id:"overview", label:"Overview", group:"dash", crumb:"Operasional", render: opsOverview },
-        { id:"tiket", label:"Daftar Tiket", group:"page", crumb:"Daftar Tiket", render: () => table({ title:"DAFTAR TIKET", cols:COLS.tiket, data:tiketRows(6) }) },
+        { id:"tiket", label:"Daftar Tiket", group:"page", crumb:"Daftar Tiket", render: () => table({ title:"DAFTAR TIKET", cols:COLS.tiket, data:(TIKET && TIKET.length ? TIKET : tiketRows(6)) }) },
         { id:"vendor", label:"Daftar Vendor", group:"page", crumb:"Daftar Vendor", render: () => table({ title:"DAFTAR VENDOR", cols:COLS.vendorOps, data:VENDOR }) },
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms("ops") },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Operasional") },
@@ -1210,6 +1234,58 @@
         const fin = buildFinanceFromTransaksi(txRows);
         if (fin) FINANCE = fin;
       }
+
+      // ---- Marketing / Sales / Operasional: baca tab log live (deteksi via header) ----
+      const findTab = (pred) => {
+        for (const k of Object.keys(sheets)) {
+          const r = sheets[k];
+          if (Array.isArray(r) && r.length >= 2) { const h = r[0].map(x => String(x).toLowerCase()); if (pred(h)) return r; }
+        }
+        return null;
+      };
+      const has = (h, s) => h.some(x => x.includes(s));
+      const objs = (rows, colMap) => {
+        const h = rows[0].map(x => String(x).toLowerCase());
+        const ix = (names) => { for (const n of names) { const i = h.findIndex(x => x.includes(n)); if (i >= 0) return i; } return -1; };
+        const ci = {}; for (const k in colMap) ci[k] = ix(colMap[k]);
+        const g = (r, i) => (i >= 0 && r[i] != null ? String(r[i]).trim() : "");
+        return rows.slice(1).map(r => { const o = {}; for (const k in ci) o[k] = g(r, ci[k]); return o; });
+      };
+      const pad3 = (n) => String(n).padStart(3, "0");
+      const num = (s) => { const n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
+
+      // Leads (Marketing)
+      const leadsRows = findTab(h => has(h, "nama leads") && has(h, "status leads"));
+      if (leadsRows) {
+        const o = objs(leadsRows, { name:["nama leads"], wa:["no hp","no. hp","wa"], asal:["sumber leads","sumber"], platform:["platform"], tanggal:["tanggal"], status:["status leads"] });
+        const pill = s => { const t = s.toLowerCase(); if (t.includes("follow")) return { t:"Follow Up", c:"s-followup" }; if (t.includes("survey")) return { t:"Survey", c:"s-progress" }; if (t.includes("booking") || t.includes("closing")) return { t:"Closing", c:"s-complete" }; return { t: s || "Baru", c:"s-leads" }; };
+        const L = o.filter(x => x.name).map((x, i) => ({ check:false, id:"LD-"+pad3(i+1), name:x.name, wa:x.wa, asal:x.asal || x.platform, tanggal:x.tanggal, status: pill(x.status) }));
+        if (L.length) LEADS = L;
+      }
+      // Survey / Prospek (Marketing & Sales)
+      const surveyTab = findTab(h => has(h, "tanggal survey") && has(h, "hasil survey"));
+      if (surveyTab) {
+        const o = objs(surveyTab, { name:["nama calon","nama"], wa:["no. hp","no hp","hp"], asal:["dari mana","sumber"], pertimbangan:["keberatan","kendala"], hasil:["hasil survey"], tanggal:["tanggal survey","tanggal"] });
+        const S = o.filter(x => x.name).map(x => ({ check:false, nama:x.name, wa:x.wa, asal:x.asal, pertimbangan:x.pertimbangan || x.hasil, tanggal:x.tanggal }));
+        if (S.length) SURVEY = S;
+      }
+      // Booking (Sales)
+      const bookingTab = findTab(h => has(h, "status booking") || has(h, "no. booking") || has(h, "no booking"));
+      if (bookingTab) {
+        const o = objs(bookingTab, { nama:["nama penyewa","nama"], kamar:["kamar"], status:["status booking","status"], durasi:["durasi"], harga:["harga"], tanggal:["tanggal booking","tanggal"], cancel:["alasan cancel"] });
+        const B = o.filter(x => x.nama);
+        if (B.length) BOOKING = B;
+      }
+      // Tiket = Preventive + Corrective maintenance (Operasional)
+      const tiketMap = { lokasi:["lokasi/item","lokasi"], desk:["deskripsi"], prioritas:["prioritas"], biaya:["biaya"], status:["status"], tgl:["tgl lapor/jadwal","tgl lapor","tanggal"] };
+      const tpill = s => { const t = s.toLowerCase(); if (t.includes("selesai") || t.includes("complete")) return { t:"Complete", c:"s-complete" }; if (t.includes("proses") || t.includes("progress")) return { t:"In Progress", c:"s-progress" }; return { t: s || "Pending", c:"s-pending" }; };
+      const mapTiket = (rows, jenis) => objs(rows, tiketMap).filter(x => x.lokasi || x.desk).map((x, i) => ({ check:false, id:"TK-"+jenis[0]+pad3(i+1), pekerjaan:x.desk || x.lokasi, jenis, lokasi:x.lokasi, tanggal:x.tgl, status: tpill(x.status), _biaya: num(x.biaya) }));
+      const prevTab = findTab(h => has(h, "lokasi/item") && has(h, "biaya") && !has(h, "sumber"));
+      const corrTab = findTab(h => has(h, "lokasi/item") && has(h, "sumber"));
+      let tk = [];
+      if (prevTab) tk = tk.concat(mapTiket(prevTab, "Preventif"));
+      if (corrTab) tk = tk.concat(mapTiket(corrTab, "Korektif"));
+      if (tk.length) TIKET = tk;
     } catch {}
   }
 
