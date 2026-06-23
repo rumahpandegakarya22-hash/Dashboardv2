@@ -176,6 +176,7 @@
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
   let LOGBOOK = [];
   let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
+  let FINANCE = null; // ringkasan keuangan dari kolom "Dampak Laba" di 3_KEUANGAN
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -507,8 +508,9 @@
 
   /* ============================ DASHBOARDS ============================== */
   function adminOverview() {
+    const F = FINANCE;
     const cards = [
-      { label:"Pendapatan", value:"150 Jt", badge:"70%", dir:"down", bg:G.adminGreen, seed:1 },
+      { label:"Pendapatan", value:F?fmtRpShort(F.pendapatanKotor):"150 Jt", badge:"70%", dir:"down", bg:G.adminGreen, seed:1 },
       { label:"Kontrak Aktif", value:String(STATS.aktif ?? 0), bg:G.adminCyan, seed:2 },
       { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), bg:G.adminOlive, seed:3, onDark:true },
       { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), bg:G.adminDarkO, seed:4, onDark:true },
@@ -516,14 +518,21 @@
     ];
     const jatuh = PENGHUNI.slice(0, 5).map(p => ({ nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo }));
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
+    const obars = F ? topEntries(F.opexBy,4) : null;
+    const opexCats = obars && obars.length ? obars.map(e=>shortAcct(e[0])) : ["Internet","Listrik","Gaji","Marketing"];
+    const opexVals = obars && obars.length ? obars.map(e=>Math.round(e[1]/1000)) : [7,18,11,24];
+    const useFinChart = F && F.maxMonth >= 1;
+    const lineInc = useFinChart ? F.monthlyInc.slice(0,F.maxMonth+1).map(v=>Math.round(v/1000)) : [8,12,10,18,15,24,20];
+    const lineExp = useFinChart ? F.monthlyExp.slice(0,F.maxMonth+1).map(v=>Math.round(v/1000)) : [12,9,14,11,17,13,22];
+    const lineLab = useFinChart ? MONTH_ID3.slice(0,F.maxMonth+1) : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
         ${donutBlock("Komposisi Kontrak", kontrakDonut, "Total Kontrak")}
-        ${chartCard("Status Kontrak", barChart(["Aktif","Booking","Selesai","Habis"],[20,6,2,1],"gAdm1",barStopsGreen,["0","10","20"]), [{t:"Jumlah Kontrak",c:"#3fae84"}])}
-        ${chartCard("OPEX", barChart(["Internet","Listrik","Gaji","Marketing"],[7,18,11,24],"gAdm2",barStopsCool,["0","10K","20K","30K"]), [{t:"Beban (Rp)",c:"#6fb1e5"}])}
+        ${chartCard("Status Kontrak", barChart(["Aktif","Booking"],[STATS.aktif||0,STATS.booking||0],"gAdm1",barStopsGreen,["0","10","20"]), [{t:"Jumlah Kontrak",c:"#3fae84"}])}
+        ${chartCard("OPEX", barChart(opexCats,opexVals,"gAdm2",barStopsCool,["0","10K","20K","30K"]), [{t:"Beban (rb)",c:"#6fb1e5"}])}
       </div>
       <div class="grid row-2-3 mt">
-        ${chartCard("Pendapatan Kotor vs Beban Operasional", lineChart([8,12,10,18,15,24,20],[12,9,14,11,17,13,22],["Jan","Feb","Mar","Apr","Mei","Jun","Jul"],["10K","20K","30K"]), [{t:"Pendapatan Kotor",c:"var(--teal)"},{t:"Beban Operasional",c:"var(--text-2)"}])}
+        ${chartCard("Pendapatan Kotor vs Beban Operasional", lineChart(lineInc,lineExp,lineLab,["10K","20K","30K"]), [{t:"Pendapatan Kotor (rb)",c:"var(--teal)"},{t:"Beban Operasional (rb)",c:"var(--text-2)"}])}
         ${table({ title:"DAFTAR JATUH TEMPO", titleRight:true, cols:COLS.jatuhTempo, data:jatuh, dateKey:"tempo" })}
       </div></div>`;
   }
@@ -573,21 +582,29 @@
   }
 
   function ownerOverview() {
+    const F = FINANCE;
     const cards = [
-      { label:"Pendapatan Kotor", value:"25,6 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:1, onDark:true },
-      { label:"Laba Bersih", value:"15,5 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:2, onDark:true },
+      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"25,6 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:1, onDark:true },
+      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"15,5 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:2, onDark:true },
       { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:3, onDark:true },
-      { label:"OPEX", value:"10,3 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:4, onDark:true },
+      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:4, onDark:true },
       { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"01%", dir:"up", bg:G.ownCyan, seed:5, onDark:true },
       { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"01%", dir:"up", bg:G.ownCyan, seed:6, onDark:true },
     ];
-    const opex = [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
-    const income = [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
+    const opex = F ? topEntries(F.opexBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
+    const income = F ? topEntries(F.incomeBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
     const kamar = [{t:"Terisi",value:STATS.aktif||0,c:PAL.owner[0]},{t:"Booking",value:STATS.booking||0,c:PAL.owner[1]},{t:"Kosong",value:STATS.kosong||0,c:PAL.owner[2]}];
+    const useFinChart = F && F.maxMonth >= 1;
+    const lineInc = useFinChart ? F.monthlyInc.slice(0,F.maxMonth+1).map(v=>Math.round(v/1000)) : [8,12,10,18,15,24,20];
+    const lineExp = useFinChart ? F.monthlyExp.slice(0,F.maxMonth+1).map(v=>Math.round(v/1000)) : [12,9,14,11,17,13,22];
+    const lineLab = useFinChart ? MONTH_ID3.slice(0,F.maxMonth+1) : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
+    const obars = F ? topEntries(F.opexBy,5) : null;
+    const opexCats = obars && obars.length ? obars.map(e=>shortAcct(e[0])) : ["Internet","Listrik","Perawatan","Gaji","Marketing"];
+    const opexVals = obars && obars.length ? obars.map(e=>Math.round(e[1]/1000)) : [10,22,14,26,12];
     return `<div class="view">${statGrid(cards,6)}
       <div class="grid row-2 mt">
-        ${chartCard("Pendapatan Kotor vs Beban Operasional", lineChart([8,12,10,18,15,24,20],[12,9,14,11,17,13,22],["Jan","Feb","Mar","Apr","Mei","Jun","Jul"],["10K","20K","30K"]), [{t:"Pendapatan Kotor",c:"var(--teal)"},{t:"Beban Operasional",c:"var(--text-2)"}])}
-        ${chartCard("Beban Operasional", barChart(["Internet","Listrik","Perawatan","Gaji","Marketing"],[10,22,14,26,12],"gOwn1",barStopsCool,["0","10K","20K","30K"]), [{t:"Beban (Rp)",c:"#6fb1e5"}])}
+        ${chartCard("Pendapatan Kotor vs Beban Operasional", lineChart(lineInc,lineExp,lineLab,["10K","20K","30K"]), [{t:"Pendapatan Kotor (rb)",c:"var(--teal)"},{t:"Beban Operasional (rb)",c:"var(--text-2)"}])}
+        ${chartCard("Beban Operasional", barChart(opexCats,opexVals,"gOwn1",barStopsCool,["0","10K","20K","30K"]), [{t:"Beban (rb)",c:"#6fb1e5"}])}
       </div>
       <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex,"OPEX")}${donutBlock("Komposisi Income",income,"Income")}${donutBlock("Komposisi Status Kamar",kamar,(STATS.kapasitas||0)+" Kamar")}</div></div>`;
   }
@@ -1190,6 +1207,8 @@
       if (Array.isArray(txRows) && txRows.length >= 2) {
         const tx = buildPembayaranFromTransaksi(txRows);
         if (tx.length) PEMBAYARAN = tx;
+        const fin = buildFinanceFromTransaksi(txRows);
+        if (fin) FINANCE = fin;
       }
     } catch {}
   }
@@ -1245,6 +1264,37 @@
       return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
     });
     return out;
+  }
+
+  /* Ringkasan keuangan dari kolom "Dampak Laba" (basis laba-rugi, anti double-entry):
+     Dampak Laba > 0 = pendapatan diakui; (xxx)/negatif = beban; "-" = transfer kas/akrual (diabaikan). */
+  const MONTH_ID3 = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
+  const fmtRpShort = (n) => { n = Math.round(n || 0); if (n >= 1e6) return (n / 1e6).toFixed(1).replace(".", ",") + " Jt"; if (n >= 1e3) return Math.round(n / 1e3) + " rb"; return "Rp" + n; };
+  const topEntries = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const shortAcct = (s) => String(s).replace(/^Beban\s+/i, "").replace(/^Pendapatan\s+/i, "").trim().slice(0, 14);
+  function buildFinanceFromTransaksi(rows) {
+    const head = rows[0].map(h => String(h).toLowerCase());
+    const idx = (...names) => { for (const n of names) { const i = head.findIndex(h => h.includes(n)); if (i >= 0) return i; } return -1; };
+    const ci = { tgl: idx("tanggal"), debit: idx("akun debit", "debit"), kredit: idx("akun kredit", "kredit"), dampak: idx("dampak laba") };
+    if (ci.dampak < 0) return null;
+    const toSigned = (s) => { const t = String(s == null ? "" : s).trim(); if (!t || t === "-") return 0; const neg = /^\(.*\)$/.test(t) || t.startsWith("-"); const n = parseInt(t.replace(/[^0-9]/g, ""), 10) || 0; return neg ? -n : n; };
+    let pendapatanKotor = 0, beban = 0, maxMonth = -1;
+    const incomeBy = {}, opexBy = {}, monthlyInc = Array(12).fill(0), monthlyExp = Array(12).fill(0);
+    rows.slice(1).forEach(r => {
+      const dl = toSigned(r[ci.dampak]);
+      if (!dl) return;
+      const d = parseDate(String(r[ci.tgl] || "").trim());
+      const m = d ? d.getMonth() : null;
+      if (dl > 0) {
+        pendapatanKotor += dl; const k = String(r[ci.kredit] || "Pendapatan").trim();
+        incomeBy[k] = (incomeBy[k] || 0) + dl; if (m != null) { monthlyInc[m] += dl; if (m > maxMonth) maxMonth = m; }
+      } else {
+        const v = -dl; beban += v; const k = String(r[ci.debit] || "Beban").trim();
+        opexBy[k] = (opexBy[k] || 0) + v; if (m != null) { monthlyExp[m] += v; if (m > maxMonth) maxMonth = m; }
+      }
+    });
+    if (pendapatanKotor === 0 && beban === 0) return null;
+    return { pendapatanKotor, beban, labaBersih: pendapatanKotor - beban, incomeBy, opexBy, monthlyInc, monthlyExp, maxMonth };
   }
 
   /* restore session on load */
