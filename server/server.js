@@ -180,22 +180,42 @@ let drive = null, driveFolders = {};
      { "spreadsheetId": "....", "serviceAccountKeyPath": "data/service-account.json" }
    Service account harus diberi akses (Viewer) ke spreadsheet Rumah_Pandega_LIVE_v2. */
 const SHEETS_CFG_FILE = path.join(DATA_DIR, "sheets-config.json");
-let sheetsApi = null, spreadsheetId = null;
+// Spreadsheet Rumah_Pandega_LIVE_v2 (ID bukan rahasia — yang rahasia hanya service account)
+const DEFAULT_SPREADSHEET_ID = "1-xXweqO9IO6s0EQqF0fc7EKSybvn5CUSD601-Dvj328";
+let sheetsApi = null, spreadsheetId = null, sheetsSource = "snapshot";
 let sheetsCache = { at: 0, data: null };
 const SHEETS_TTL = 5 * 60 * 1000; // cache 5 menit
 (function initSheets() {
   try {
-    if (!fs.existsSync(SHEETS_CFG_FILE)) { console.log("[sheets] data/sheets-config.json belum ada — dashboard pakai data snapshot bawaan."); return; }
-    const cfg = JSON.parse(fs.readFileSync(SHEETS_CFG_FILE, "utf8"));
-    spreadsheetId = cfg.spreadsheetId;
-    const keyRel = cfg.serviceAccountKeyPath || "data/service-account.json";
-    const keyPath = path.isAbsolute(keyRel) ? keyRel : path.join(ROOT, keyRel);
-    if (!spreadsheetId) { console.warn("[sheets] spreadsheetId kosong di sheets-config.json."); return; }
-    if (!fs.existsSync(keyPath)) { console.warn("[sheets] service account key tidak ditemukan:", keyPath); return; }
+    const SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
+    // 1) Kredensial service account: dari ENV (Vercel/serverless) ATAU file lokal.
+    let credentials = null, keyFile = null;
+    const envJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GCP_SERVICE_ACCOUNT_JSON;
+    const envB64 = process.env.GOOGLE_SERVICE_ACCOUNT_B64 || process.env.GCP_SERVICE_ACCOUNT_B64;
+    if (envJson) credentials = JSON.parse(envJson);
+    else if (envB64) credentials = JSON.parse(Buffer.from(envB64, "base64").toString("utf8"));
+    // 2) Spreadsheet ID: ENV → file config → default.
+    spreadsheetId = process.env.SHEETS_SPREADSHEET_ID || process.env.SPREADSHEET_ID || null;
+    // 3) Fallback ke file lokal bila ENV tidak lengkap.
+    if ((!credentials || !spreadsheetId) && fs.existsSync(SHEETS_CFG_FILE)) {
+      const cfg = JSON.parse(fs.readFileSync(SHEETS_CFG_FILE, "utf8"));
+      if (!spreadsheetId) spreadsheetId = cfg.spreadsheetId;
+      if (!credentials) {
+        const keyRel = cfg.serviceAccountKeyPath || "data/service-account.json";
+        const keyPath = path.isAbsolute(keyRel) ? keyRel : path.join(ROOT, keyRel);
+        if (fs.existsSync(keyPath)) keyFile = keyPath;
+      }
+    }
+    if (!spreadsheetId) spreadsheetId = DEFAULT_SPREADSHEET_ID;
+    if (!credentials && !keyFile) {
+      console.log("[sheets] kredensial service account belum ada (set ENV GOOGLE_SERVICE_ACCOUNT_JSON) — dashboard pakai snapshot bawaan.");
+      return;
+    }
     const { google } = require("googleapis");
-    const auth = new google.auth.GoogleAuth({ keyFile: keyPath, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
+    const auth = new google.auth.GoogleAuth(credentials ? { credentials, scopes: SCOPES } : { keyFile, scopes: SCOPES });
     sheetsApi = google.sheets({ version: "v4", auth });
-    console.log("[sheets] Google Sheets integration AKTIF (read-only).");
+    sheetsSource = credentials ? "env" : "file";
+    console.log("[sheets] Google Sheets integration AKTIF (read-only, sumber kredensial: " + sheetsSource + ").");
   } catch (e) { console.warn("[sheets] gagal inisialisasi:", e.message); }
 })();
 
@@ -433,6 +453,11 @@ app.get("/api/health", async (_req, res) => {
     totalEnvKeys: Object.keys(process.env).length,
     urlLen: REDIS_URL.length,
     tokenLen: REDIS_TOKEN.length,
+    // diagnosa integrasi Google Sheets (data live dashboard)
+    sheetsConfigured: !!sheetsApi,
+    sheetsSource,
+    hasServiceAccountEnv: !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_B64 || process.env.GCP_SERVICE_ACCOUNT_JSON),
+    spreadsheetIdSet: !!spreadsheetId,
   };
   if (USE_REDIS) {
     try { await redisGet("ktd:health"); out.redisOk = true; }
