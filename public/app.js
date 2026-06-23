@@ -175,6 +175,7 @@
   }));
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
   let LOGBOOK = [];
+  let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -189,14 +190,28 @@
   }
   function recomputeFromPenghuni() {
     OCC_BY_ROOM = Object.fromEntries(PENGHUNI.map(p => [p.kamar, p]));
-    // 30 scorecards — Data Kamar
-    ROOMS = Array.from({ length: 30 }, (_, i) => {
-      const no = i + 1, jenis = ROOM_TYPE(no), occ = OCC_BY_ROOM[no];
-      let status = occ ? (occ.status === "Booking (DP)" ? "Booking" : "Terisi") : "Kosong";
-      if (no === 9) status = "Maintenance";
-      if (no === 28 || no === 30) status = "Kosong";
-      return { no: String(no).padStart(2, "0"), jenis, penghuni: occ ? occ.nama : "", wa: occ ? occ.kontak : "", harga: PRICE[jenis], status };
+    // Data Kamar — HANYA kamar yang ada di data (tidak mengarang Kosong/Maintenance).
+    // Status murni dari data penghuni: Booking (DP) → "Booking", lainnya → "Terisi".
+    ROOMS = PENGHUNI.map(p => ({
+      no: String(p.kamar).padStart(2, "0"), _n: +p.kamar, jenis: p.jenis,
+      penghuni: p.nama, wa: p.kontak, harga: PRICE[p.jenis] || "",
+      status: /booking/i.test(p.status || "") ? "Booking" : "Terisi",
+    })).sort((a, b) => a._n - b._n);
+    // Metrik turunan (instruksi: hitung sendiri dari ketersediaan data)
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const DAY = 86400000;
+    let aktif = 0, booking = 0, tunggakan = 0, jatuhTempo = 0;
+    PENGHUNI.forEach(p => {
+      if (/booking/i.test(p.status || "")) booking++; else aktif++;
+      const d = parseDate(p.tempo);
+      if (d) { const diff = Math.round((d - today) / DAY); if (diff < 0) tunggakan++; else if (diff <= 7) jatuhTempo++; }
     });
+    const kapasitas = PENGHUNI.length, occupied = PENGHUNI.length;
+    STATS = {
+      aktif, booking, tunggakan, jatuhTempo, kapasitas, occupied,
+      kosong: Math.max(0, kapasitas - occupied),
+      okupansi: kapasitas ? Math.round((occupied / kapasitas) * 100) : 0,
+    };
     // Data Pembayaran (fallback dari PENGHUNI bila TRANSAKSI belum live) —
     // struktur baru: Tanggal | Jenis Transaksi | Nama Transaksi | Jumlah | Keterangan
     PEMBAYARAN = PENGHUNI.slice(0, 14).map((p) => {
@@ -490,13 +505,13 @@
   function adminOverview() {
     const cards = [
       { label:"Pendapatan", value:"150 Jt", badge:"70%", dir:"down", bg:G.adminGreen, seed:1 },
-      { label:"Kontrak Aktif", value:"29", bg:G.adminCyan, seed:2 },
-      { label:"Kamar Kosong", value:"2", bg:G.adminOlive, seed:3, onDark:true },
-      { label:"Tunggakan", value:"1", bg:G.adminDarkO, seed:4, onDark:true },
-      { label:"Jatuh Tempo", value:"3", bg:G.adminDarkG, seed:5, onDark:true },
+      { label:"Kontrak Aktif", value:String(STATS.aktif ?? 0), bg:G.adminCyan, seed:2 },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), bg:G.adminOlive, seed:3, onDark:true },
+      { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), bg:G.adminDarkO, seed:4, onDark:true },
+      { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), bg:G.adminDarkG, seed:5, onDark:true },
     ];
     const jatuh = PENGHUNI.slice(0, 5).map(p => ({ nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo }));
-    const kontrakDonut = [{t:"Aktif",value:20,c:PAL.admin[0]},{t:"Booking",value:6,c:PAL.admin[1]},{t:"Selesai",value:3,c:PAL.admin[2]}];
+    const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
         ${donutBlock("Komposisi Kontrak", kontrakDonut, "Total Kontrak")}
@@ -557,20 +572,20 @@
     const cards = [
       { label:"Pendapatan Kotor", value:"25,6 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:1, onDark:true },
       { label:"Laba Bersih", value:"15,5 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:2, onDark:true },
-      { label:"Okupansi", value:"96 %", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:3, onDark:true },
+      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:3, onDark:true },
       { label:"OPEX", value:"10,3 Jt", badge:"11.01%", dir:"up", bg:G.ownCyan, seed:4, onDark:true },
-      { label:"Kamar Kosong", value:"2", badge:"01%", dir:"up", bg:G.ownCyan, seed:5, onDark:true },
-      { label:"Kamar Isi", value:"28", badge:"01%", dir:"up", bg:G.ownCyan, seed:6, onDark:true },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"01%", dir:"up", bg:G.ownCyan, seed:5, onDark:true },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"01%", dir:"up", bg:G.ownCyan, seed:6, onDark:true },
     ];
     const opex = [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
     const income = [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
-    const kamar = [{t:"Terisi",value:26,c:PAL.owner[0]},{t:"Booking",value:2,c:PAL.owner[1]},{t:"Kosong",value:1,c:PAL.owner[2]},{t:"Maintenance",value:1,c:PAL.owner[3]}];
+    const kamar = [{t:"Terisi",value:STATS.aktif||0,c:PAL.owner[0]},{t:"Booking",value:STATS.booking||0,c:PAL.owner[1]},{t:"Kosong",value:STATS.kosong||0,c:PAL.owner[2]}];
     return `<div class="view">${statGrid(cards,6)}
       <div class="grid row-2 mt">
         ${chartCard("Pendapatan Kotor vs Beban Operasional", lineChart([8,12,10,18,15,24,20],[12,9,14,11,17,13,22],["Jan","Feb","Mar","Apr","Mei","Jun","Jul"],["10K","20K","30K"]), [{t:"Pendapatan Kotor",c:"var(--teal)"},{t:"Beban Operasional",c:"var(--text-2)"}])}
         ${chartCard("Beban Operasional", barChart(["Internet","Listrik","Perawatan","Gaji","Marketing"],[10,22,14,26,12],"gOwn1",barStopsCool,["0","10K","20K","30K"]), [{t:"Beban (Rp)",c:"#6fb1e5"}])}
       </div>
-      <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex,"OPEX")}${donutBlock("Komposisi Income",income,"Income")}${donutBlock("Komposisi Status Kamar",kamar,"30 Kamar")}</div></div>`;
+      <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex,"OPEX")}${donutBlock("Komposisi Income",income,"Income")}${donutBlock("Komposisi Status Kamar",kamar,(STATS.kapasitas||0)+" Kamar")}</div></div>`;
   }
 
   function salesOverview() {
@@ -1236,6 +1251,19 @@
       if (res.ok) { const u = await res.json(); cur.auth = true; cur.role = u.role; cur.user = u.name; cur.tfaEnabled = !!u.tfaEnabled; cur.page = ROLES[cur.role].pages[0].id; await loadLiveData(); }
     } catch {}
     render();
+    startAutoRefresh();
+  }
+
+  /* Auto-refresh data live tiap 10 menit (instruksi: update per 10 menit).
+     Tarik ulang dari /api/sheets lalu render ulang halaman aktif tanpa reload. */
+  let refreshTimer = null;
+  function startAutoRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(async () => {
+      if (!cur.auth) return;
+      await loadLiveData();
+      render();
+    }, 10 * 60 * 1000);
   }
   document.addEventListener("DOMContentLoaded", init);
 })();
