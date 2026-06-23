@@ -178,6 +178,7 @@
   let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
   let FINANCE = null; // ringkasan keuangan dari kolom "Dampak Laba" di 3_KEUANGAN
   let TIKET = null, BOOKING = null; // tiket (maintenance) & booking dari tab live
+  let DOKUMEN = null; // dokumen dari tab 14_DOKUMEN (per role)
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -245,7 +246,7 @@
   let LEADS = SURVEY.map((s, i) => ({ ...s, id:"LD-"+String(i+1).padStart(3,"0"), status: LEAD_STATUS[i % 2] }));
 
   // Daftar Vendor — Hasil dropdown + WA
-  const VENDOR = [
+  let VENDOR = [
     { id:"VD-001", nama:"CV Bersih Sejahtera", kategori:"Kebersihan", kontak:"0812-3456-7890", hasil:"Paling Baik" },
     { id:"VD-002", nama:"Toko Listrik Jaya",   kategori:"Elektrikal", kontak:"0813-2233-4455", hasil:"Baik" },
     { id:"VD-003", nama:"Air Bersih Tirta",    kategori:"Sanitasi",  kontak:"0857-1122-3344", hasil:"Cukup" },
@@ -292,10 +293,16 @@
     marketing:"https://drive.google.com/drive/my-drive", operasional:"https://drive.google.com/drive/my-drive", sales:"https://drive.google.com/drive/my-drive",
   };
   function dokumenRows(role, n) {
+    const rl = String(role).toLowerCase();
+    // Data live dari 14_DOKUMEN: owner lihat semua, role lain hanya miliknya
+    if (DOKUMEN && DOKUMEN.length) {
+      const list = rl === "owner" ? DOKUMEN : DOKUMEN.filter(d => (d.role || "").toLowerCase() === rl);
+      return list.map(d => ({ id: d.id, nama: d.name, link: d.link }));
+    }
     const names = ["Kontrak Sewa","Bukti Pembayaran","Surat Perjanjian","SOP Divisi","Laporan Bulanan","Berita Acara"];
     return Array.from({ length: n }, (_, i) => ({
       id:"#CM98"+String(i+1).padStart(2,"0"), nama: names[i % names.length],
-      link: DRIVE_FOLDER[role.toLowerCase()] || "https://drive.google.com/drive/my-drive",
+      link: DRIVE_FOLDER[rl] || "https://drive.google.com/drive/my-drive",
     }));
   }
   // Tiket Operasional
@@ -583,9 +590,12 @@
     ];
     const nInspeksi = LOGBOOK.length ? LOGBOOK.filter(r=>r.divisi==="Inspeksi").length : 8;
     const tiketDonut = [{t:"Preventif",value:nPrev,c:PAL.operasional[0]},{t:"Korektif",value:nKor,c:PAL.operasional[1]},{t:"Inspeksi",value:nInspeksi,c:PAL.operasional[2]}];
+    const ebars = FINANCE ? topEntries(FINANCE.opexBy,4) : null;
+    const expCats = ebars && ebars.length ? ebars.map(e=>shortAcct(e[0])) : ["Listrik","Air","Perbaikan","Perawatan"];
+    const expVals = ebars && ebars.length ? ebars.map(e=>Math.round(e[1]/1000)) : [15,22,18,12];
     return `<div class="view">${statGrid(top,5)}
       <div class="grid row-3 mt" style="grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,1fr))">
-        ${chartCard("Expense Category", barChart(["Listrik","Air","Perbaikan","Perawatan"],[15,22,18,12],"gOp1",barStopsWarm,["0","10K","20K","30K"]), [{t:"Beban (Rp)",c:"#e58a6f"}])}
+        ${chartCard("Expense Category", barChart(expCats,expVals,"gOp1",barStopsWarm,["0","10K","20K","30K"]), [{t:"Beban (rb)",c:"#e58a6f"}])}
         ${statCard(mid[0])}${statCard(mid[1])}
       </div>
       <div class="grid row-3 mt">
@@ -1286,6 +1296,21 @@
       if (prevTab) tk = tk.concat(mapTiket(prevTab, "Preventif"));
       if (corrTab) tk = tk.concat(mapTiket(corrTab, "Korektif"));
       if (tk.length) TIKET = tk;
+
+      // Vendor (12_VENDOR)
+      const vendorTab = findTab(h => has(h, "nama vendor"));
+      if (vendorTab) {
+        const o = objs(vendorTab, { nama:["nama vendor"], kategori:["kategori"], kontak:["nomor telp","telp","kontak"], hasil:["hasil"] });
+        const V = o.filter(x => x.nama).map((x, i) => ({ id:"VD-"+pad3(i+1), nama:x.nama, kategori:x.kategori, kontak:x.kontak, hasil:x.hasil || "-", wa:x.kontak }));
+        if (V.length) VENDOR = V;
+      }
+      // Dokumen (14_DOKUMEN)
+      const dokTab = findTab(h => has(h, "judul") && (has(h, "role") || has(h, "link drive")));
+      if (dokTab) {
+        const o = objs(dokTab, { id:["id"], name:["judul","nama"], role:["role"], kategori:["kategori"], tanggal:["tanggal"], link:["link drive","link"] });
+        const D = o.filter(x => x.name).map((x, i) => ({ id:x.id || "DOC-"+pad3(i+1), name:x.name, role:x.role, kategori:x.kategori, tanggal:x.tanggal, link:x.link || "https://drive.google.com/drive/my-drive" }));
+        if (D.length) DOKUMEN = D;
+      }
     } catch {}
   }
 
