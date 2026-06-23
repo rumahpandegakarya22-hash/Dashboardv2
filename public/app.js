@@ -166,7 +166,6 @@
     "Aktif":"k-aktif", "Booking (DP)":"k-booking", "Lunas":"k-lunas",
     "Belum Lunas":"k-belum", "Tunggakan":"k-tunggak", "Masa Sewa Berakhir":"k-habis", "Kosong":"k-kosong",
   };
-  const METODE = ["Transfer", "Tunai", "QRIS", "Transfer"];
 
   // PENGHUNI & struktur turunannya — `let` agar bisa dihidrasi data live (lihat loadLiveData)
   let PENGHUNI = PENGHUNI_RAW.map(r => ({
@@ -175,6 +174,19 @@
     status:r[11], kontak:r[12], kontakNama:r[13], email:r[14],
   }));
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
+  let LOGBOOK = [];
+  const LOG_DIVISI_BY_ROLE = {
+    owner:       null,
+    admin:       ['Admin', 'Keuangan'],
+    marketing:   ['Marketing'],
+    sales:       ['Sales'],
+    operasional: ['Kebersihan', 'Inspeksi', 'Maintenance'],
+  };
+  function logbookForRole(role) {
+    const allowed = LOG_DIVISI_BY_ROLE[role];
+    if (!allowed || !LOGBOOK.length) return null;
+    return LOGBOOK.filter(r => allowed.includes(r.divisi));
+  }
   function recomputeFromPenghuni() {
     OCC_BY_ROOM = Object.fromEntries(PENGHUNI.map(p => [p.kamar, p]));
     // 30 scorecards — Data Kamar
@@ -185,12 +197,18 @@
       if (no === 28 || no === 30) status = "Kosong";
       return { no: String(no).padStart(2, "0"), jenis, penghuni: occ ? occ.nama : "", wa: occ ? occ.kontak : "", harga: PRICE[jenis], status };
     });
-    // Data Pembayaran — status: DP / Pelunasan
-    PEMBAYARAN = PENGHUNI.slice(0, 12).map((p, i) => ({
-      tanggal: p.masuk, id: p.id, nama: p.nama, kamar: p.kamar, jenis: p.jenis,
-      nominal: PRICE[p.jenis], metode: METODE[i % METODE.length],
-      status: (p.status === "Booking (DP)" || i % 3 === 1) ? { t:"DP", c:"s-pending" } : { t:"Pelunasan", c:"s-complete" },
-    }));
+    // Data Pembayaran (fallback dari PENGHUNI bila TRANSAKSI belum live) —
+    // struktur baru: Tanggal | Jenis Transaksi | Nama Transaksi | Jumlah | Keterangan
+    PEMBAYARAN = PENGHUNI.slice(0, 14).map((p) => {
+      const isDP = p.status === "Booking (DP)";
+      return {
+        tanggal: p.masuk,
+        jenisTx: { t:"Pemasukan", c:"s-complete" },
+        namaTx: "Pembayaran Sewa " + (p.panggil || p.nama),
+        jumlah: "Rp" + (PRICE[p.jenis] || 0).toLocaleString("id-ID"),
+        keterangan: "Kamar " + p.kamar + " · " + (isDP ? "DP" : "Pelunasan"),
+      };
+    });
   }
   recomputeFromPenghuni();
 
@@ -229,8 +247,8 @@
     }[div] || ["Tugas harian"];
     const D = ["2 Jun 2026","3 Jun 2026","4 Jun 2026","5 Jun 2026"], DL = ["10 Jun 2026","11 Jun 2026","12 Jun 2026","13 Jun 2026"];
     return Array.from({ length: n }, (_, i) => ({
-      tanggal: D[i % 4], nama: PETUGAS[div], divisi: div.charAt(0).toUpperCase() + div.slice(1),
-      deadline: DL[i % 4], task: tasks[i % tasks.length], logStatus: LOG_STATUS[i % LOG_STATUS.length],
+      tanggal: D[i % 4], pic: PETUGAS[div], divisi: div.charAt(0).toUpperCase() + div.slice(1),
+      deadline: DL[i % 4], name: tasks[i % tasks.length], logStatus: LOG_STATUS[i % LOG_STATUS.length],
     }));
   }
   // Logbook Operasional (khusus, sesuai Logbook Operasional.png): 3 tabel
@@ -357,6 +375,7 @@
           case "name":      return `<td><span class="cell-name"><span class="avatar">${initials(r.nama || r.name || v)}</span>${r.nama || r.name || v}</span></td>`;
           case "kostStatus":return `<td><span class="status ${KOST_CLASS[r.status] || ""}">${r.status}</span></td>`;
           case "status":
+          case "jenisTx":
           case "prioritas": return v && v.t ? `<td><span class="status ${v.c}">${v.t}</span></td>` : `<td>${v ?? ""}</td>`;
           case "logStatus": return `<td>${dropdown("log", v)}</td>`;
           case "hasil":     return `<td>${dropdown("hasil", v)}</td>`;
@@ -389,11 +408,11 @@
     ],
     penghuniSales: [{key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"tempo",label:"Tanggal Jatuh Tempo"}],
     pembayaran: [
-      {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"id",label:"ID"},{key:"name",label:"Nama"},
-      {key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"nominal",label:"Nominal"},{key:"metode",label:"Metode"},{key:"status",label:"Status"},
+      {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"jenisTx",label:"Jenis Transaksi"},
+      {key:"namaTx",label:"Nama Transaksi"},{key:"jumlah",label:"Jumlah"},{key:"keterangan",label:"Keterangan"},
     ],
     dokumen: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"open",label:"Link"}],
-    logbook: [{key:"tanggal",label:"Tanggal"},{key:"name",label:"Task"},{key:"divisi",label:"Divisi"},{key:"deadline",label:"Deadline"},{key:"logStatus",label:"Status"}],
+    logbook: [{key:"tanggal",label:"Tanggal"},{key:"name",label:"Task"},{key:"pic",label:"PIC"},{key:"divisi",label:"Divisi"},{key:"deadline",label:"Deadline"},{key:"logStatus",label:"Status"}],
     jatuhTempo: [{key:"name",label:"Nama"},{key:"wa",label:"Nomor WA"},{key:"tempo",label:"Tanggal"},{key:"tagihan",label:"Tagihan"}],
     vendor: [{key:"name",label:"Nama Vendor"},{key:"kategori",label:"Kategori"},{key:"kontak",label:"Nomor Telepon"},{key:"hasil",label:"Hasil"}],
     vendorOps: [{key:"name",label:"Nama Vendor"},{key:"kategori",label:"Kategori"},{key:"kontak",label:"Nomor Telepon"},{key:"hasil",label:"Hasil"},{key:"aksi",label:"WhatsApp"}],
@@ -583,7 +602,7 @@
         { id:"pembayaran", label:"Data Pembayaran", group:"page", crumb:"Data Pembayaran", render: pagePembayaran },
         { id:"vendor", label:"Daftar Vendor", group:"page", crumb:"Daftar Vendor", render: () => table({ title:"DAFTAR VENDOR", cols:COLS.vendor, data:VENDOR }) },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Admin") },
-        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK ADMIN", titleRight:true, cols:COLS.logbook, data:logbookRows("admin",6) }) },
+        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK ADMIN & KEUANGAN", titleRight:true, cols:COLS.logbook, data:logbookForRole("admin") || logbookRows("admin",6) }) },
       ],
     },
     marketing: {
@@ -595,7 +614,7 @@
             table({ title:"DAFTAR SURVEY", cols:COLS.prospek, data:surveyRows() }),
           ) },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Marketing") },
-        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK MARKETING", titleRight:true, cols:COLS.logbook, data:logbookRows("marketing",6) }) },
+        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK MARKETING", titleRight:true, cols:COLS.logbook, data:logbookForRole("marketing") || logbookRows("marketing",6) }) },
       ],
     },
     operasional: {
@@ -606,7 +625,15 @@
         { id:"vendor", label:"Daftar Vendor", group:"page", crumb:"Daftar Vendor", render: () => table({ title:"DAFTAR VENDOR", cols:COLS.vendorOps, data:VENDOR }) },
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms("ops") },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Operasional") },
-        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: logbookOpsPage },
+        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => {
+            const live = logbookForRole("operasional");
+            if (live) return stackTables(
+              table({ title:"Logbook Inspeksi",    titleRight:true, cols:COLS.logbook, data:live.filter(r => r.divisi==="Inspeksi") }),
+              table({ title:"Logbook Maintenance", titleRight:true, cols:COLS.logbook, data:live.filter(r => r.divisi==="Maintenance") }),
+              table({ title:"Logbook Kebersihan",  titleRight:true, cols:COLS.logbook, data:live.filter(r => r.divisi==="Kebersihan") }),
+            );
+            return logbookOpsPage();
+          } },
       ],
     },
     sales: {
@@ -617,7 +644,7 @@
         { id:"penghuni", label:"Daftar Penghuni", group:"page", crumb:"Daftar Penghuni", render: pagePenghuniSales },
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms() },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Sales") },
-        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK SALES", titleRight:true, cols:COLS.logbook, data:logbookRows("sales",6) }) },
+        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK SALES", titleRight:true, cols:COLS.logbook, data:logbookForRole("sales") || logbookRows("sales",6) }) },
       ],
     },
     owner: {
@@ -632,8 +659,8 @@
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms() },
         { id:"pembayaran", label:"Data Pembayaran", group:"page", crumb:"Data Pembayaran", render: pagePembayaran },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Owner") },
-        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK OWNER · SEMUA DIVISI", titleRight:true, cols:COLS.logbook,
-            data:["admin","keuangan","marketing","operasional","sales"].flatMap(d => logbookRows(d,2)) }) },
+        { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK · SEMUA DIVISI", titleRight:true, cols:COLS.logbook,
+            data:LOGBOOK.length ? LOGBOOK : ["admin","keuangan","marketing","operasional","sales"].flatMap(d => logbookRows(d,2)) }) },
       ],
     },
   };
@@ -1117,7 +1144,84 @@
         };
       });
       if (data.length) { PENGHUNI = data; recomputeFromPenghuni(); }
+
+      // Hydrate LOGBOOK dari tab 13_LOGBOOK
+      const lbKey = Object.keys(sheets).find(k => /logbook/i.test(k));
+      const lbRows = lbKey && sheets[lbKey];
+      if (Array.isArray(lbRows) && lbRows.length >= 2) {
+        const lbHead = lbRows[0].map(h => String(h).toLowerCase());
+        const lc = (...names) => { for (const n of names) { const i = lbHead.findIndex(h => h.includes(n)); if (i >= 0) return i; } return -1; };
+        const lci = { tanggal: lc("tanggal"), name: lc("task","deskripsi"), pic: lc("pic","petugas"), divisi: lc("divisi"), deadline: lc("deadline"), logStatus: lc("status") };
+        const lg = (r, i, d="") => (i >= 0 && r[i] != null ? String(r[i]) : d);
+        const lbData = lbRows.slice(1).filter(r => lg(r, lci.tanggal)).map(r => ({
+          tanggal: lg(r, lci.tanggal), name: lg(r, lci.name), pic: lg(r, lci.pic),
+          divisi: lg(r, lci.divisi), deadline: lg(r, lci.deadline), logStatus: lg(r, lci.logStatus),
+        }));
+        if (lbData.length) LOGBOOK = lbData;
+      }
+
+      // Hydrate Data Pembayaran dari tab TRANSAKSI (deteksi via header Akun Debit/Kredit)
+      const txKey = Object.keys(sheets).find(k => {
+        const r = sheets[k];
+        if (!Array.isArray(r) || !r.length) return false;
+        const h = r[0].map(x => String(x).toLowerCase());
+        return h.some(x => x.includes("debit")) && h.some(x => x.includes("kredit"));
+      });
+      const txRows = txKey && sheets[txKey];
+      if (Array.isArray(txRows) && txRows.length >= 2) {
+        const tx = buildPembayaranFromTransaksi(txRows);
+        if (tx.length) PEMBAYARAN = tx;
+      }
     } catch {}
+  }
+
+  // Akun kas/bank (dari COA) — penentu arah pemasukan/pengeluaran
+  const KAS_ACCOUNTS = ["uang kas", "aset bank", "rekening ops", "rekening profit"];
+  function buildPembayaranFromTransaksi(rows) {
+    const head = rows[0].map(h => String(h).toLowerCase());
+    const idx = (...names) => { for (const n of names) { const i = head.findIndex(h => h.includes(n)); if (i >= 0) return i; } return -1; };
+    const ci = { tgl: idx("tanggal"), debit: idx("akun debit", "debit"), kredit: idx("akun kredit", "kredit"), nominal: idx("nominal"), ket: idx("keterangan") };
+    if (ci.tgl < 0 || ci.nominal < 0 || ci.debit < 0 || ci.kredit < 0) return [];
+    const isKas = (s) => KAS_ACCOUNTS.includes(String(s || "").trim().toLowerCase());
+    // Akun pendapatan riil (bukan "Pendapatan Diterima di Muka" yang liabilitas)
+    const isPendapatan = (s) => { const t = String(s || "").trim().toLowerCase(); if (t.includes("diterima di muka")) return false; return t.startsWith("pendapatan") || t === "denda" || t === "tambahan listrik" || t.includes("laba penjualan"); };
+    const isBeban = (s) => { const t = String(s || "").trim().toLowerCase(); return t.startsWith("beban") || t.startsWith("utilitas"); };
+    const toNum = (s) => { const n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
+    const out = [];
+    rows.slice(1).forEach(r => {
+      const tgl = String(r[ci.tgl] || "").trim();
+      const nominal = toNum(r[ci.nominal]);
+      if (!tgl || !nominal) return;
+      const debit = r[ci.debit], kredit = r[ci.kredit];
+      const ket = String(r[ci.ket] || "").trim();
+      // Lewati pengakuan/spreading bulanan ("Pengakuan sewa bln-N") — duplikat dari penerimaan kas
+      if (/pengakuan/i.test(ket)) return;
+      let jenis = null;
+      if (isKas(debit) && !isKas(kredit)) jenis = "Pemasukan";        // kas masuk
+      else if (isKas(kredit) && !isKas(debit)) jenis = "Pengeluaran"; // kas keluar
+      else if (isPendapatan(kredit)) jenis = "Pemasukan";            // pendapatan diakui tanpa baris kas (mis. Sewa Kamar Delinda)
+      else if (isBeban(debit)) jenis = "Pengeluaran";                // beban diakui tanpa baris kas
+      else return; // mutasi neraca murni (mis. kas↔deposit) → bukan pembayaran
+      const namaTx = ket || (jenis === "Pemasukan" ? String(kredit) : String(debit));
+      // enrich keterangan: nomor kamar + DP/Pelunasan/Sewa untuk pendapatan sewa
+      let extra = "";
+      if (jenis === "Pemasukan") {
+        const p = PENGHUNI.find(p => {
+          const toks = [p.panggil, (p.nama || "").split(" ")[0]].filter(Boolean).map(t => String(t).toLowerCase());
+          return toks.some(t => t.length > 2 && ket.toLowerCase().includes(t));
+        });
+        if (p) {
+          const tag = /sewa/i.test(ket) ? (p.status === "Booking (DP)" ? "DP" : "Pelunasan") : "";
+          extra = "Kamar " + p.kamar + (tag ? " · " + tag : "");
+        }
+      }
+      out.push({
+        tanggal: tgl,
+        jenisTx: jenis === "Pemasukan" ? { t: "Pemasukan", c: "s-complete" } : { t: "Pengeluaran", c: "s-pending" },
+        namaTx, jumlah: "Rp" + nominal.toLocaleString("id-ID"), keterangan: extra,
+      });
+    });
+    return out;
   }
 
   /* restore session on load */
