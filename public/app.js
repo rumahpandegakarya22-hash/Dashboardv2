@@ -41,6 +41,21 @@
   // hitung jumlah baris per bulan (untuk sparkline metrik berbasis tanggal)
   const monthlyCount = (rows, dateKey) => { const m = Array(12).fill(0); (rows || []).forEach((r) => { const d = parseDate(r && r[dateKey]); if (d) m[d.getMonth()]++; }); return m; };
 
+  // === Satuan uang OTOMATIS: pilih rb/Jt/M sesuai besaran (hindari "ribu" saat sudah jutaan) ===
+  const moneyScale = (max) => { const m = Math.abs(Number(max) || 0); if (m >= 1e9) return { div: 1e9, unit: "M" }; if (m >= 1e6) return { div: 1e6, unit: "Jt" }; if (m >= 1e3) return { div: 1e3, unit: "rb" }; return { div: 1, unit: "" }; };
+  const scaleVals = (arr, sc) => (arr || []).map(v => Math.round((Number(v) / sc.div) * 10) / 10);
+  // === Badge tren scorecard dihitung dari DERET data (sparkline). Hijau = naik, Merah = turun. ===
+  const trendBadge = (series) => {
+    const s = (Array.isArray(series) ? series : []).map(Number).filter(v => !isNaN(v));
+    const nz = s.filter(v => v !== 0);
+    if (s.length < 2 || nz.length < 1) return { badge: "0%", dir: "up", pct: 0 };
+    const last = s[s.length - 1];
+    let base = 0; for (let i = s.length - 2; i >= 0; i--) { if (s[i] !== 0) { base = s[i]; break; } }
+    if (!base) base = nz[0];
+    const pct = base ? Math.round(((last - base) / Math.abs(base)) * 100) : 0;
+    return { badge: Math.abs(pct) + "%", dir: pct >= 0 ? "up" : "down", pct };
+  };
+
   /* ---------------------------------------------------------------- icons */
   const I = {
     home:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h14V9"/></svg>',
@@ -78,16 +93,20 @@
   }
 
   function donut(segments, center) {
-    const size = 150, r = 56, cx = size / 2, cy = size / 2, sw = 22, C = 2 * Math.PI * r;
-    const total = segments.reduce((s, x) => s + x.value, 0);
+    const size = 160, r = 60, cx = size / 2, cy = size / 2, sw = 22, C = 2 * Math.PI * r;
+    // Kaidah viz: butt-cap (tanpa cap bulat yang mendistorsi proporsi) + celah seragam kecil
+    const segs = (segments || []).filter(s => Number(s.value) > 0);
+    const total = segs.reduce((s, x) => s + Number(x.value), 0) || 1;
+    const gap = segs.length > 1 ? 2 : 0; // celah konstan (px keliling), bukan per-segmen
     let offset = 0;
-    const rings = segments.map((s) => {
-      const len = (s.value / total) * C, pct = Math.round((s.value / total) * 100);
-      const ring = `<circle class="donut__seg" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${len - 4} ${C - len + 4}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" data-tip-label="${esc(s.label || "")}" data-tip-value="${esc(s.value + " (" + pct + "%)")}" data-tip-color="${s.color}"/>`;
+    const rings = segs.map((s) => {
+      const frac = Number(s.value) / total, len = frac * C, pct = Math.round(frac * 100);
+      const draw = Math.max(0.5, len - gap);
+      const ring = `<circle class="donut__seg" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}" stroke-linecap="butt" stroke-dasharray="${draw} ${C - draw}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" data-tip-label="${esc(s.label || "")}" data-tip-value="${esc((s.disp != null ? s.disp : s.value) + " · " + pct + "%")}" data-tip-color="${s.color}"/>`;
       offset += len; return ring;
     }).join("");
-    const ctr = center ? `<div class="donut__center"><small>${center.label}</small><b>${center.value}</b></div>` : "";
-    return `<div class="donut__chart"><svg viewBox="0 0 ${size} ${size}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--rail)" stroke-width="${sw}"/>${rings}</svg>${ctr}</div>`;
+    const ctr = center ? `<div class="donut__center"><small>${esc(center.label)}</small><b>${esc(center.value)}</b></div>` : "";
+    return `<div class="donut__chart"><svg viewBox="0 0 ${size} ${size}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--rail)" stroke-width="${sw}" opacity=".3"/>${rings}</svg>${ctr}</div>`;
   }
 
   // bar chart WITH data labels on top of each bar.
@@ -150,11 +169,21 @@
   const chartLegend = (items) => `<div class="chart-legend">${items.map(i => `<span class="legend-item"><i style="background:${i.c}"></i>${esc(i.t)}</span>`).join("")}</div>`;
   const chartCard = (title, inner, legendItems) => `<div class="card"><div class="card__title">${title}</div>${inner}${legendItems ? chartLegend(legendItems) : ""}</div>`;
   // donut block with title + legend that matches the segments
-  function donutBlock(label, segs) {
-    // tanpa angka/persen di tengah donut (center = null) — sesuai revisi
-    return `<div class="card"><div class="card__title" style="text-align:center;margin-bottom:8px">${esc(label)}</div><div class="donut">
-      ${donut(segs.map(s => ({ value: s.value, color: s.c, label: s.t })), null)}
-      ${chartLegend(segs.map(s => ({ t: s.t, c: s.c })))}</div></div>`;
+  function donutBlock(label, segs, opt) {
+    opt = opt || {};
+    // Kaidah viz: urut besar→kecil, grup slice kecil jadi "Lainnya", center = TOTAL (the whole)
+    let arr = (segs || []).filter(s => Number(s.value) > 0).slice().sort((a, b) => Number(b.value) - Number(a.value));
+    if (arr.length > 6) { const head = arr.slice(0, 5), tail = arr.slice(5); const sum = tail.reduce((s, x) => s + Number(x.value), 0); head.push({ t: "Lainnya", value: sum, c: "var(--text-3)" }); arr = head; }
+    const sum = arr.reduce((s, x) => s + Number(x.value), 0);
+    const total = sum || 1;
+    const fmtV = opt.money ? (v) => fmtRpShort(v) : (v) => fmtNum(v, opt.unit || "");
+    const segObjs = arr.map(s => ({ value: Number(s.value), color: s.c, label: s.t, disp: fmtV(Number(s.value)) }));
+    const center = opt.center === false ? null : { label: opt.centerLabel || "Total", value: fmtV(sum) };
+    const legend = `<div class="chart-legend chart-legend--detailed">${arr.map(s => {
+      const pct = Math.round(Number(s.value) / total * 100);
+      return `<span class="legend-item"><i style="background:${s.c}"></i><span class="lg-t">${esc(s.t)}</span><span class="lg-v">${esc(fmtV(Number(s.value)))} · ${pct}%</span></span>`;
+    }).join("")}</div>`;
+    return `<div class="card"><div class="card__title" style="text-align:center;margin-bottom:8px">${esc(label)}</div><div class="donut">${donut(segObjs, center)}${legend}</div></div>`;
   }
 
   /* ===================================================================== */
@@ -211,6 +240,7 @@
   let LOGBOOK = [];
   let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
   let FINANCE = null; // ringkasan keuangan dari kolom "Dampak Laba" di 3_KEUANGAN
+  let TX_ROWS = null; // baris mentah TRANSAKSI (untuk hitung ulang keuangan per periode tanggal)
   let TIKET = null, BOOKING = null; // tiket (maintenance) & booking dari tab live
   let DOKUMEN = null; // dokumen dari tab 14_DOKUMEN (per role)
   const LOG_DIVISI_BY_ROLE = {
@@ -352,12 +382,15 @@
   /* --------------------------------------------------------- components */
   function statCard(c) {
     const dark = c.onDark ? " on-dark" : "";
-    const up = c.dir !== "down";
-    const good = (c.good !== undefined) ? c.good : up;          // hijau bila perubahan menguntungkan
-    const col = good ? "#13a05f" : "#e23d3d";
+    // Tren dihitung dari DERET data (sparkline). Bila tak ada deret, pakai badge/dir manual.
+    const hasSeries = Array.isArray(c.spark) && c.spark.length > 1;
+    const t = hasSeries ? trendBadge(c.spark) : { badge: c.badge || "0%", dir: c.dir || "up" };
+    const up = t.dir !== "down";
+    const col = up ? "#13a05f" : "#e23d3d";   // KONSISTEN: hijau = kenaikan, merah = penurunan
     const arrow = up ? "▲" : "▼";
-    // pill % dipindah ke kanan-tengah + panah naik/turun berwarna sesuai konteks
-    const badge = c.badge ? `<span class="stat-card__badge" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:3px;color:${col};background:var(--badge-bg,rgba(255,255,255,.22));padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;line-height:1">${arrow} ${esc(c.badge)}</span>` : "";
+    const badgeText = t.badge;
+    // pill % di kanan-tengah + panah naik/turun (warna sesuai arah perubahan)
+    const badge = `<span class="stat-card__badge" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:3px;color:${col};background:var(--badge-bg,rgba(255,255,255,.22));padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;line-height:1">${arrow} ${esc(badgeText)}</span>`;
     // garis dalam scorecard = sparkline DATA asli (bukan ornamen)
     const spark = sparkline(c.spark, c.onDark ? "rgba(255,255,255,.7)" : "rgba(20,40,60,.45)");
     return `<article class="stat-card${dark}" style="background:${c.bg};position:relative">
@@ -550,6 +583,9 @@
   const barStopsGreen = '<stop offset="0%" stop-color="#8ce0a0"/><stop offset="100%" stop-color="#2f8f7a"/>';
   const barStopsWarm  = '<stop offset="0%" stop-color="#e58a6f"/><stop offset="100%" stop-color="#7a5fae"/>';
   const barStopsCool  = '<stop offset="0%" stop-color="#6fb1e5"/><stop offset="100%" stop-color="#8a6fae"/>';
+  // Bar Owner: palet brand (dusty rose → charcoal), bukan biru
+  const barStopsOwner = '<stop offset="0%" stop-color="#CF7B72"/><stop offset="100%" stop-color="#3A3635"/>';
+  const OWN_BAR = "#CF7B72"; // warna legenda bar owner
 
   /* division donut palettes (sesuai colour guideline tiap halaman) */
   const PAL = {
@@ -562,35 +598,37 @@
 
   /* ============================ DASHBOARDS ============================== */
   function adminOverview() {
-    const F = FINANCE;
-    const moveIn = monthlyCount(PENGHUNI, "masuk"), tempoSpark = monthlyCount(PENGHUNI, "tempo");
-    const cashSpark = F ? F.monthlyCashIn : moveIn;
+    const F = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : null;
+    const moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk"), tempoSpark = monthlyCount(filterByPeriod(PENGHUNI, "tempo"), "tempo");
+    const cashSpark = F ? F.cashSeries : moveIn;
     const cards = [
-      { label:"Pendapatan", value:F?fmtRpShort(F.pendapatanKotor):"150 Jt", badge:"12%", dir:"up", good:true, spark:cashSpark, bg:G.adminGreen },
-      { label:"Kontrak Aktif", value:String(STATS.aktif ?? 0), badge:"5%", dir:"up", good:true, spark:moveIn, bg:G.adminCyan },
-      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.adminOlive, onDark:true },
-      { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), badge:"3%", dir:"up", good:false, spark:tempoSpark, bg:G.adminDarkO, onDark:true },
-      { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), badge:"2%", dir:"up", good:false, spark:tempoSpark, bg:G.adminDarkG, onDark:true },
+      { label:"Pendapatan", value:F?fmtRpShort(F.pendapatanKotor):"—", spark:cashSpark, bg:G.adminGreen },
+      { label:"Kontrak Aktif", value:String(STATS.aktif ?? 0), spark:moveIn, bg:G.adminCyan },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), spark:moveIn, bg:G.adminOlive, onDark:true },
+      { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), spark:tempoSpark, bg:G.adminDarkO, onDark:true },
+      { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), spark:tempoSpark, bg:G.adminDarkG, onDark:true },
     ];
     const jatuh = PENGHUNI.slice(0, 5).map(p => ({ nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo }));
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
-    const obars = F ? topEntries(F.opexBy,4) : null;
-    const opexCats = obars && obars.length ? obars.map(e=>shortAcct(e[0])) : ["Internet","Listrik","Gaji","Marketing"];
-    const opexVals = obars && obars.length ? obars.map(e=>Math.round(e[1]/1000)) : [7,18,11,24];
-    const useFinChart = F && F.maxMonth >= 1;
-    const k1 = (a) => a.slice(0, F.maxMonth + 1).map(v => Math.round(v / 1000));
-    const lineInc = useFinChart ? k1(F.monthlyCashIn) : [8,12,10,18,15,24,20];
-    const lineExp = useFinChart ? k1(F.monthlyExp) : [12,9,14,11,17,13,22];
-    const lineLaba = useFinChart ? k1(F.monthlyLaba) : lineInc.map((v,i)=>v-lineExp[i]);
-    const lineLab = useFinChart ? MONTH_ID3.slice(0,F.maxMonth+1) : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
+    const obars = F ? topEntries(F.opexBy,4) : [["Internet",7e6],["Listrik",18e6],["Gaji",11e6],["Marketing",24e6]];
+    const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1])));
+    const opexCats = obars.map(e=>shortAcct(e[0])), opexVals = scaleVals(obars.map(e=>e[1]),bsc);
+    const hasFin = F && F.nBuckets >= 1;
+    const lineLab = hasFin ? F.labels : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
+    const cashR = hasFin ? F.cashSeries : [8e6,12e6,10e6,18e6,15e6,24e6,20e6];
+    const expR  = hasFin ? F.expSeries  : [12e6,9e6,14e6,11e6,17e6,13e6,22e6];
+    const labaR = hasFin ? F.labaSeries : cashR.map((v,i)=>v-expR[i]);
+    const lsc = moneyScale(Math.max(1,...cashR,...expR,...labaR.map(Math.abs)));
+    const lineInc = scaleVals(cashR,lsc), lineExp = scaleVals(expR,lsc), lineLaba = scaleVals(labaR,lsc);
+    const U = lsc.unit ? " ("+lsc.unit+")" : "", BU = bsc.unit ? " ("+bsc.unit+")" : "";
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
-        ${donutBlock("Komposisi Kontrak", kontrakDonut)}
+        ${donutBlock("Komposisi Kontrak", kontrakDonut, {centerLabel:"Total Kontrak"})}
         ${chartCard("Status Kontrak", barChart(["Aktif","Booking"],[STATS.aktif||0,STATS.booking||0],"gAdm1",barStopsGreen), [{t:"Jumlah Kontrak",c:"#3fae84"}])}
-        ${chartCard("OPEX", barChart(opexCats,opexVals,"gAdm2",barStopsCool,null,"rb"), [{t:"Beban (rb)",c:"#6fb1e5"}])}
+        ${chartCard("OPEX", barChart(opexCats,opexVals,"gAdm2",barStopsGreen,null,bsc.unit), [{t:"Beban"+BU,c:"#3fae84"}])}
       </div>
       <div class="grid row-2-3 mt">
-        ${chartCard("Pendapatan Kotor vs Beban vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],"rb"), [{t:"Pendapatan Kotor (rb)",c:"var(--teal)"},{t:"Beban Operasional (rb)",c:"var(--text-2)"},{t:"Laba Rugi (rb)",c:"#e0a13a"}])}
+        ${chartCard("Pendapatan Kotor vs Beban vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}])}
         ${table({ title:"DAFTAR JATUH TEMPO", titleRight:true, cols:COLS.jatuhTempo, data:jatuh, dateKey:"tempo" })}
       </div></div>`;
   }
@@ -598,7 +636,7 @@
   function marketingOverview() {
     const nLeads = LEADS.length, nSurvey = SURVEY.length;
     const konv = nLeads ? Math.round((nSurvey / nLeads) * 100) : 0;
-    const leadSpark = monthlyCount(LEADS, "tanggal"), survSpark = monthlyCount(SURVEY, "tanggal"), moveIn = monthlyCount(PENGHUNI, "masuk");
+    const leadSpark = monthlyCount(filterByPeriod(LEADS, "tanggal"), "tanggal"), survSpark = monthlyCount(filterByPeriod(SURVEY, "tanggal"), "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
     const cards = [
       { label:"Leads", value:String(nLeads), badge:"15%", dir:"up", good:true, spark:leadSpark, bg:G.mkLeads },
       { label:"Survey", value:String(nSurvey), badge:"15%", dir:"up", good:true, spark:survSpark, bg:G.mkSurvey, onDark:true },
@@ -628,9 +666,9 @@
     const totalTiket = nPrev + nKor;
     const cost = T ? T.reduce((s,x)=>s+(x._biaya||0),0) : null;
     const defect = totalTiket ? Math.round((nKor/totalTiket)*100) : 0;
-    const tikSpark = monthlyCount(TIKET || [], "tanggal");
-    const korSpark = monthlyCount((TIKET || []).filter(x=>x.jenis==="Korektif"), "tanggal");
-    const prevSpark = monthlyCount((TIKET || []).filter(x=>x.jenis==="Preventif"), "tanggal");
+    const tikSpark = monthlyCount(filterByPeriod(TIKET || [], "tanggal"), "tanggal");
+    const korSpark = monthlyCount(filterByPeriod((TIKET || []).filter(x=>x.jenis==="Korektif"), "tanggal"), "tanggal");
+    const prevSpark = monthlyCount(filterByPeriod((TIKET || []).filter(x=>x.jenis==="Preventif"), "tanggal"), "tanggal");
     const top = [
       { label:"Tiket Preventif", value:String(nPrev), badge:"15%", dir:"up", good:true, spark:prevSpark, bg:G.opRed, onDark:true },
       { label:"Tiket Korektif", value:String(nKor), badge:"15%", dir:"down", good:true, spark:korSpark, bg:G.opOrange, onDark:true },
@@ -644,12 +682,13 @@
     ];
     const nInspeksi = LOGBOOK.length ? LOGBOOK.filter(r=>r.divisi==="Inspeksi").length : 8;
     const tiketDonut = [{t:"Preventif",value:nPrev,c:PAL.operasional[0]},{t:"Korektif",value:nKor,c:PAL.operasional[1]},{t:"Inspeksi",value:nInspeksi,c:PAL.operasional[2]}];
-    const ebars = FINANCE ? topEntries(FINANCE.opexBy,4) : null;
-    const expCats = ebars && ebars.length ? ebars.map(e=>shortAcct(e[0])) : ["Listrik","Air","Perbaikan","Perawatan"];
-    const expVals = ebars && ebars.length ? ebars.map(e=>Math.round(e[1]/1000)) : [15,22,18,12];
+    const Fop = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : FINANCE;
+    const ebars = Fop ? topEntries(Fop.opexBy,4) : [["Listrik",15e6],["Air",22e6],["Perbaikan",18e6],["Perawatan",12e6]];
+    const esc2 = moneyScale(Math.max(1,...ebars.map(e=>e[1])));
+    const expCats = ebars.map(e=>shortAcct(e[0])), expVals = scaleVals(ebars.map(e=>e[1]),esc2);
     return `<div class="view">${statGrid(top,5)}
       <div class="grid row-3 mt" style="grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,1fr))">
-        ${chartCard("Expense Category", barChart(expCats,expVals,"gOp1",barStopsWarm,null,"rb"), [{t:"Beban (rb)",c:"#e58a6f"}])}
+        ${chartCard("Expense Category", barChart(expCats,expVals,"gOp1",barStopsWarm,null,esc2.unit), [{t:"Beban"+(esc2.unit?" ("+esc2.unit+")":""),c:"#e58a6f"}])}
         ${statCard(mid[0])}${statCard(mid[1])}
       </div>
       <div class="grid row-3 mt">
@@ -661,35 +700,41 @@
   }
 
   function ownerOverview() {
-    const F = FINANCE;
-    const moveIn = monthlyCount(PENGHUNI, "masuk"); // tren penghuni masuk per bulan
-    const cashSpark = F ? F.monthlyCashIn : moveIn, labaSpark = F ? F.monthlyLaba : moveIn, opexSpark = F ? F.monthlyExp : moveIn;
+    // Keuangan dihitung ULANG untuk periode tanggal yang dipilih (line/scorecard/donut ikut berubah)
+    const F = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : null;
+    const moveInRows = filterByPeriod(PENGHUNI, "masuk");
+    const moveIn = monthlyCount(moveInRows, "masuk"); // tren penghuni masuk (periode)
+    const cashSpark = F ? F.cashSeries : moveIn, labaSpark = F ? F.labaSeries : moveIn, opexSpark = F ? F.expSeries : moveIn;
     const cards = [
-      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"25,6 Jt", badge:"11%", dir:"up", good:true, spark:cashSpark, bg:G.ownPrimary, onDark:true },
-      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"15,5 Jt", badge:"11%", dir:"up", good:true, spark:labaSpark, bg:G.ownPrimary, onDark:true },
-      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11%", dir:"up", good:true, spark:moveIn, bg:G.ownRose, onDark:true },
-      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11%", dir:"up", good:false, spark:opexSpark, bg:G.ownGray, onDark:true },
-      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.ownGray, onDark:true },
-      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"1%", dir:"up", good:true, spark:moveIn, bg:G.ownRose, onDark:true },
+      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"—", spark:cashSpark, bg:G.ownPrimary, onDark:true },
+      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"—", spark:labaSpark, bg:G.ownPrimary, onDark:true },
+      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", spark:moveIn, bg:G.ownRose, onDark:true },
+      { label:"OPEX", value:F?fmtRpShort(F.beban):"—", spark:opexSpark, bg:G.ownGray, onDark:true },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), spark:moveIn, bg:G.ownGray, onDark:true },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.ownRose, onDark:true },
     ];
-    const opex = F ? topEntries(F.opexBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
-    const income = F ? topEntries(F.incomeBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
+    const opex = F ? topEntries(F.opexBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:3500000,c:PAL.owner[0]},{t:"Gaji",value:3000000,c:PAL.owner[1]},{t:"Perawatan",value:2000000,c:PAL.owner[2]},{t:"Marketing",value:1500000,c:PAL.owner[3]}];
+    const income = F ? topEntries(F.incomeBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:20000000,c:PAL.owner[0]},{t:"Denda",value:800000,c:PAL.owner[1]},{t:"Listrik",value:1200000,c:PAL.owner[2]}];
     const kamar = [{t:"Terisi",value:STATS.aktif||0,c:PAL.owner[0]},{t:"Booking",value:STATS.booking||0,c:PAL.owner[1]},{t:"Kosong",value:STATS.kosong||0,c:PAL.owner[2]}];
-    const useFinChart = F && F.maxMonth >= 1;
-    const k1 = (a) => a.slice(0, F.maxMonth + 1).map(v => Math.round(v / 1000));
-    const lineInc = useFinChart ? k1(F.monthlyCashIn) : [8,12,10,18,15,24,20]; // Pendapatan Kotor = cashflow
-    const lineExp = useFinChart ? k1(F.monthlyExp) : [12,9,14,11,17,13,22];
-    const lineLaba = useFinChart ? k1(F.monthlyLaba) : lineInc.map((v,i)=>v-lineExp[i]); // Laba Rugi (akuntansi)
-    const lineLab = useFinChart ? MONTH_ID3.slice(0,F.maxMonth+1) : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
-    const obars = F ? topEntries(F.opexBy,5) : null;
-    const opexCats = obars && obars.length ? obars.map(e=>shortAcct(e[0])) : ["Internet","Listrik","Perawatan","Gaji","Marketing"];
-    const opexVals = obars && obars.length ? obars.map(e=>Math.round(e[1]/1000)) : [10,22,14,26,12];
+    // Line chart: deret periode (raw Rp) → satuan uang otomatis
+    const hasFin = F && F.nBuckets >= 1;
+    const lineLab = hasFin ? F.labels : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
+    const cashR = hasFin ? F.cashSeries : [8e6,12e6,10e6,18e6,15e6,24e6,20e6];
+    const expR  = hasFin ? F.expSeries  : [12e6,9e6,14e6,11e6,17e6,13e6,22e6];
+    const labaR = hasFin ? F.labaSeries : cashR.map((v,i)=>v-expR[i]);
+    const lsc = moneyScale(Math.max(1,...cashR,...expR,...labaR.map(Math.abs)));
+    const lineInc = scaleVals(cashR,lsc), lineExp = scaleVals(expR,lsc), lineLaba = scaleVals(labaR,lsc);
+    const U = lsc.unit ? " ("+lsc.unit+")" : "";
+    // Bar Beban Operasional: raw Rp → satuan otomatis, warna brand owner
+    const obars = F ? topEntries(F.opexBy,5) : [["Internet",10e6],["Listrik",22e6],["Perawatan",14e6],["Gaji",26e6],["Marketing",12e6]];
+    const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1])));
+    const opexCats = obars.map(e=>shortAcct(e[0])), opexVals = scaleVals(obars.map(e=>e[1]),bsc);
     return `<div class="view">${statGrid(cards,6)}
       <div class="grid row-2 mt">
-        ${chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],"rb"), [{t:"Pendapatan Kotor (rb)",c:"var(--teal)"},{t:"Beban Operasional (rb)",c:"var(--text-2)"},{t:"Laba Rugi (rb)",c:"#e0a13a"}])}
-        ${chartCard("Beban Operasional", barChart(opexCats,opexVals,"gOwn1",barStopsCool,null,"rb"), [{t:"Beban (rb)",c:"#6fb1e5"}])}
+        ${chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}])}
+        ${chartCard("Beban Operasional", barChart(opexCats,opexVals,"gOwn1",barStopsOwner,null,bsc.unit), [{t:"Beban"+(bsc.unit?" ("+bsc.unit+")":""),c:OWN_BAR}])}
       </div>
-      <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex)}${donutBlock("Komposisi Income",income)}${donutBlock("Komposisi Status Kamar",kamar)}</div></div>`;
+      <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex,{money:true,centerLabel:"Total OPEX"})}${donutBlock("Komposisi Income",income,{money:true,centerLabel:"Total Income"})}${donutBlock("Komposisi Status Kamar",kamar,{centerLabel:"Total Kamar"})}</div></div>`;
   }
 
   function salesOverview() {
@@ -701,7 +746,7 @@
     const convRate = nLeads ? ((nBooking / nLeads) * 100).toFixed(1).replace(".", ",") : "0";
     const durs = B ? B.map(x=>parseInt(String(x.durasi).replace(/[^0-9]/g,""),10)).filter(n=>n>0) : [];
     const avgDur = durs.length ? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length) : 9;
-    const bookSpark = monthlyCount(BOOKING || [], "tanggal"), survSpark = monthlyCount(SURVEY, "tanggal"), moveIn = monthlyCount(PENGHUNI, "masuk");
+    const bookSpark = monthlyCount(filterByPeriod(BOOKING || [], "tanggal"), "tanggal"), survSpark = monthlyCount(filterByPeriod(SURVEY, "tanggal"), "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
     const cards = [
       { label:"Booking", value:String(nBooking), badge:"15%", dir:"up", good:true, spark:bookSpark, bg:G.salePink },
       { label:"Cancellation Rate", value:(B?cancelRate:5)+" %", badge:"15%", dir:"down", good:true, spark:bookSpark, bg:G.saleRed },
@@ -1301,6 +1346,7 @@
       if (Array.isArray(txRows) && txRows.length >= 2) {
         const tx = buildPembayaranFromTransaksi(txRows);
         if (tx.length) PEMBAYARAN = tx;
+        TX_ROWS = txRows; // simpan mentah → keuangan dihitung ulang per periode tanggal
         const fin = buildFinanceFromTransaksi(txRows);
         if (fin) FINANCE = fin;
       }
@@ -1463,6 +1509,44 @@
     // laba rugi per bulan (akrual) = pendapatan diakui − beban diakui
     const monthlyLaba = monthlyInc.map((v, i) => v - monthlyExp[i]);
     return { pendapatanKotor, beban, labaBersih: pendapatanKotor - beban, incomeBy, opexBy, monthlyInc, monthlyExp, monthlyCashIn, monthlyLaba, maxMonth };
+  }
+
+  /* Keuangan DINAMIS per rentang tanggal: saring TRANSAKSI ke [from,to] lalu bucket otomatis.
+     Granularitas adaptif: rentang ≤ 62 hari → harian; selain itu → bulanan.
+     Output: totals + breakdown (untuk donut) + deret (labels/cash/inc/exp/laba untuk line & sparkline). */
+  function computeFinance(rows, range) {
+    if (!Array.isArray(rows) || rows.length < 2) return null;
+    const head = rows[0].map(h => String(h).toLowerCase());
+    const idx = (...names) => { for (const n of names) { const i = head.findIndex(h => h.includes(n)); if (i >= 0) return i; } return -1; };
+    const ci = { tgl: idx("tanggal"), debit: idx("akun debit", "debit"), kredit: idx("akun kredit", "kredit"), dampak: idx("dampak laba"), arus: idx("arus kas") };
+    if (ci.dampak < 0) return null;
+    const toSigned = (s) => { const t = String(s == null ? "" : s).trim(); if (!t || t === "-") return 0; const neg = /^\(.*\)$/.test(t) || t.startsWith("-"); const n = parseInt(t.replace(/[^0-9]/g, ""), 10) || 0; return neg ? -n : n; };
+    const from = range && range.from, to = range && range.to;
+    const recs = [];
+    rows.slice(1).forEach(r => {
+      const d = parseDate(String(r[ci.tgl] || "").trim());
+      if (!d) return;
+      if (from && d < from) return;
+      if (to && d > to) return;
+      recs.push({ d, arus: ci.arus >= 0 ? toSigned(r[ci.arus]) : 0, dl: toSigned(r[ci.dampak]), kredit: String(r[ci.kredit] || "Pendapatan").trim(), debit: String(r[ci.debit] || "Beban").trim() });
+    });
+    if (!recs.length) return null;
+    let pendapatanKotor = 0, beban = 0; const incomeBy = {}, opexBy = {};
+    recs.forEach(x => { if (x.dl > 0) { pendapatanKotor += x.dl; incomeBy[x.kredit] = (incomeBy[x.kredit] || 0) + x.dl; } else if (x.dl < 0) { const v = -x.dl; beban += v; opexBy[x.debit] = (opexBy[x.debit] || 0) + v; } });
+    const minT = Math.min(...recs.map(x => x.d.getTime())), maxT = Math.max(...recs.map(x => x.d.getTime()));
+    const spanDays = Math.round((maxT - minT) / 86400000) + 1;
+    const daily = spanDays <= 62;
+    const keyOf = daily ? (d) => d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate() : (d) => d.getFullYear() + "-" + d.getMonth();
+    const labOf = daily ? (d) => d.getDate() + " " + MONTH_ID3[d.getMonth()] : (d) => MONTH_ID3[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
+    const buckets = new Map(); const order = []; const repT = {};
+    recs.forEach(x => { const k = keyOf(x.d); if (!buckets.has(k)) { buckets.set(k, { label: labOf(x.d), cash: 0, inc: 0, exp: 0 }); order.push(k); repT[k] = x.d.getTime(); } const b = buckets.get(k); if (x.arus > 0) b.cash += x.arus; if (x.dl > 0) b.inc += x.dl; else if (x.dl < 0) b.exp += -x.dl; });
+    order.sort((a, b) => repT[a] - repT[b]);
+    const labels = order.map(k => buckets.get(k).label);
+    const cashSeries = order.map(k => buckets.get(k).cash);
+    const incSeries = order.map(k => buckets.get(k).inc);
+    const expSeries = order.map(k => buckets.get(k).exp);
+    const labaSeries = order.map(k => { const b = buckets.get(k); return b.inc - b.exp; });
+    return { pendapatanKotor, beban, labaBersih: pendapatanKotor - beban, incomeBy, opexBy, labels, cashSeries, incSeries, expSeries, labaSeries, daily, nBuckets: order.length };
   }
 
   /* restore session on load */

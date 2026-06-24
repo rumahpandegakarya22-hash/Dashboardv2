@@ -854,3 +854,16 @@ body[data-role="owner"] .topbar__icon#securityBtn { color: var(--owner-brand); }
 
 /* Glass tile micro-refinement: tepi specular halus (design-system glass-edge) */
 .card, .stat-card, .login-card, .sec-modal { position: relative; }
+
+/* Donut legend rinci (kaidah viz): daftar vertikal + nilai & persentase per kategori */
+.donut { width: 100%; }
+.donut__center b { font-size: 18px; }
+.donut__center small { text-transform: uppercase; letter-spacing: .04em; }
+.chart-legend--detailed {
+  display: flex; flex-direction: column; gap: 7px; align-items: stretch;
+  width: 100%; justify-content: flex-start; border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;
+}
+.chart-legend--detailed .legend-item { display: flex; align-items: center; gap: 9px; font-size: 12px; width: 100%; }
+.chart-legend--detailed .legend-item i { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.chart-legend--detailed .lg-t { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.chart-legend--detailed .lg-v { flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text-1); }
