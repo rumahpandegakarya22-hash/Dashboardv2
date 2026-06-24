@@ -168,11 +168,32 @@
 
   const chartLegend = (items) => `<div class="chart-legend">${items.map(i => `<span class="legend-item"><i style="background:${i.c}"></i>${esc(i.t)}</span>`).join("")}</div>`;
   const chartCard = (title, inner, legendItems) => `<div class="card"><div class="card__title">${title}</div>${inner}${legendItems ? chartLegend(legendItems) : ""}</div>`;
+  // Empty-state: tampilkan placeholder, BUKAN data dummy, saat periode tak punya data
+  const emptyChart = (msg) => `<div class="chart-empty">${esc(msg || "Tidak ada data pada periode ini")}</div>`;
+  const emptyCard = (title, msg) => `<div class="card"><div class="card__title">${esc(title)}</div>${emptyChart(msg)}</div>`;
+  // Deret waktu dari kumpulan baris (adaptif harian≤62h / bulanan); null bila kosong pada periode
+  function seriesByDate(sets, range) {
+    const within = (d) => d && (!range.from || d >= range.from) && (!range.to || d <= range.to);
+    const times = [];
+    sets.forEach(s => (s.rows || []).forEach(r => { const d = parseDate(r[s.dateKey]); if (within(d)) times.push(d.getTime()); }));
+    if (!times.length) return null;
+    const minT = Math.min(...times), maxT = Math.max(...times);
+    const daily = (Math.round((maxT - minT) / 86400000) + 1) <= 62;
+    const keyOf = daily ? (d) => d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate() : (d) => d.getFullYear() + "-" + d.getMonth();
+    const labOf = daily ? (d) => d.getDate() + " " + MONTH_ID3[d.getMonth()] : (d) => MONTH_ID3[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
+    const order = [], repT = {}, labMap = {};
+    const ensure = (d) => { const k = keyOf(d); if (repT[k] == null) { repT[k] = d.getTime(); order.push(k); labMap[k] = labOf(d); } return k; };
+    const counts = sets.map(() => ({}));
+    sets.forEach((s, si) => (s.rows || []).forEach(r => { const d = parseDate(r[s.dateKey]); if (!within(d)) return; const k = ensure(d); counts[si][k] = (counts[si][k] || 0) + 1; }));
+    order.sort((a, b) => repT[a] - repT[b]);
+    return { labels: order.map(k => labMap[k]), seriesList: counts.map(c => order.map(k => c[k] || 0)), names: sets.map(s => s.name), daily };
+  }
   // donut block with title + legend that matches the segments
   function donutBlock(label, segs, opt) {
     opt = opt || {};
     // Kaidah viz: urut besar→kecil, grup slice kecil jadi "Lainnya", center = TOTAL (the whole)
     let arr = (segs || []).filter(s => Number(s.value) > 0).slice().sort((a, b) => Number(b.value) - Number(a.value));
+    if (!arr.length) return emptyCard(label); // periode kosong → jangan tampilkan donut palsu
     if (arr.length > 6) { const head = arr.slice(0, 5), tail = arr.slice(5); const sum = tail.reduce((s, x) => s + Number(x.value), 0); head.push({ t: "Lainnya", value: sum, c: "var(--text-3)" }); arr = head; }
     const sum = arr.reduce((s, x) => s + Number(x.value), 0);
     const total = sum || 1;
@@ -382,15 +403,17 @@
   /* --------------------------------------------------------- components */
   function statCard(c) {
     const dark = c.onDark ? " on-dark" : "";
-    // Tren dihitung dari DERET data (sparkline). Bila tak ada deret, pakai badge/dir manual.
+    // Tren dihitung dari DERET data (sparkline). Bila tak ada deret, pakai badge manual bila ada.
     const hasSeries = Array.isArray(c.spark) && c.spark.length > 1;
-    const t = hasSeries ? trendBadge(c.spark) : { badge: c.badge || "0%", dir: c.dir || "up" };
-    const up = t.dir !== "down";
-    const col = up ? "#13a05f" : "#e23d3d";   // KONSISTEN: hijau = kenaikan, merah = penurunan
-    const arrow = up ? "▲" : "▼";
-    const badgeText = t.badge;
-    // pill % di kanan-tengah + panah naik/turun (warna sesuai arah perubahan)
-    const badge = `<span class="stat-card__badge" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:3px;color:${col};background:var(--badge-bg,rgba(255,255,255,.22));padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;line-height:1">${arrow} ${esc(badgeText)}</span>`;
+    const t = hasSeries ? trendBadge(c.spark) : (c.badge ? { badge: c.badge, dir: c.dir || "up" } : null);
+    let badge = "";
+    if (t) {
+      const up = t.dir !== "down";
+      const col = up ? "#13a05f" : "#e23d3d";   // KONSISTEN: hijau = kenaikan, merah = penurunan
+      const arrow = up ? "▲" : "▼";
+      // pill % di kanan-tengah + panah naik/turun (warna sesuai arah perubahan)
+      badge = `<span class="stat-card__badge" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:3px;color:${col};background:var(--badge-bg,rgba(255,255,255,.22));padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;line-height:1">${arrow} ${esc(t.badge)}</span>`;
+    }
     // garis dalam scorecard = sparkline DATA asli (bukan ornamen)
     const spark = sparkline(c.spark, c.onDark ? "rgba(255,255,255,.7)" : "rgba(20,40,60,.45)");
     return `<article class="stat-card${dark}" style="background:${c.bg};position:relative">
@@ -400,7 +423,7 @@
   }
   const statGrid = (cards, cols) => `<section class="stat-grid" style="--cols:${cols}">${cards.map(statCard).join("")}</section>`;
 
-  // filter & sort kini per-kolom (di header tabel); toolbar cukup search global + tambah.
+  // satu search bar mewakili semua kolom; sort via klik header. (filter per-kolom dihapus)
   const toolbar = () => `<div class="table-toolbar">
       <button class="tool-btn" data-act="add" aria-label="Tambah dokumen" title="Tambah dokumen baru">${I.plus}</button>
       <label class="search"><span>${I.search}</span><input type="text" placeholder="Cari semua kolom…" data-act="tsearch"></label>
@@ -466,11 +489,7 @@
     const { title, cols, paginate, titleRight } = cfg;
     const dateKey = cfg.dateKey || (cols.some(c => c.key === "tanggal") ? "tanggal" : null);
     const data = filterByPeriod(cfg.data, dateKey);
-    const NO_FILTER = new Set(["check", "aksi", "open", "tagihan"]);
     const heads = cols.map((c, i) => `<th data-col="${i}" class="th-sort">${c.label}<span class="sort-ind" aria-hidden="true"></span></th>`).join("");
-    const filterRow = `<tr class="tbl-filter">${cols.map((c, i) => NO_FILTER.has(c.key)
-      ? "<th></th>"
-      : `<th><input class="col-filter" data-fcol="${i}" placeholder="cari…" aria-label="Filter ${esc(c.label || "kolom")}" style="width:100%;box-sizing:border-box;font:inherit;font-size:11px;padding:3px 7px;border:1px solid var(--rail,#d8dee5);border-radius:6px;background:var(--card,#fff);color:inherit" /></th>`).join("")}</tr>`;
     const body = data.map(r => {
       const tds = cols.map(col => {
         const k = col.key, v = r[k];
@@ -499,7 +518,7 @@
       ${title ? `<h2 class="section-title ${titleRight ? "right" : ""}">${title}</h2>` : ""}
       ${toolbar()}
       <div class="card" style="padding:4px 2px"><div class="tbl-wrap"><table class="tbl">
-        <thead><tr>${heads}</tr>${filterRow}</thead><tbody>${body}</tbody></table></div></div>
+        <thead><tr>${heads}</tr></thead><tbody>${body}</tbody></table></div></div>
       ${pager}</section>`;
   }
 
@@ -599,10 +618,10 @@
   /* ============================ DASHBOARDS ============================== */
   function adminOverview() {
     const F = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : null;
+    const hasFin = F && F.nBuckets >= 1;
     const moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk"), tempoSpark = monthlyCount(filterByPeriod(PENGHUNI, "tempo"), "tempo");
-    const cashSpark = F ? F.cashSeries : moveIn;
     const cards = [
-      { label:"Pendapatan", value:F?fmtRpShort(F.pendapatanKotor):"—", spark:cashSpark, bg:G.adminGreen },
+      { label:"Pendapatan", value:fmtRpShort(F ? F.pendapatanKotor : 0), spark:F ? F.cashSeries : [], bg:G.adminGreen },
       { label:"Kontrak Aktif", value:String(STATS.aktif ?? 0), spark:moveIn, bg:G.adminCyan },
       { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), spark:moveIn, bg:G.adminOlive, onDark:true },
       { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), spark:tempoSpark, bg:G.adminDarkO, onDark:true },
@@ -610,164 +629,169 @@
     ];
     const jatuh = PENGHUNI.slice(0, 5).map(p => ({ nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo }));
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
-    const obars = F ? topEntries(F.opexBy,4) : [["Internet",7e6],["Listrik",18e6],["Gaji",11e6],["Marketing",24e6]];
-    const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1])));
-    const opexCats = obars.map(e=>shortAcct(e[0])), opexVals = scaleVals(obars.map(e=>e[1]),bsc);
-    const hasFin = F && F.nBuckets >= 1;
-    const lineLab = hasFin ? F.labels : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
-    const cashR = hasFin ? F.cashSeries : [8e6,12e6,10e6,18e6,15e6,24e6,20e6];
-    const expR  = hasFin ? F.expSeries  : [12e6,9e6,14e6,11e6,17e6,13e6,22e6];
-    const labaR = hasFin ? F.labaSeries : cashR.map((v,i)=>v-expR[i]);
-    const lsc = moneyScale(Math.max(1,...cashR,...expR,...labaR.map(Math.abs)));
-    const lineInc = scaleVals(cashR,lsc), lineExp = scaleVals(expR,lsc), lineLaba = scaleVals(labaR,lsc);
-    const U = lsc.unit ? " ("+lsc.unit+")" : "", BU = bsc.unit ? " ("+bsc.unit+")" : "";
+    // OPEX bar — data real; kosong → empty state
+    const obars = F ? topEntries(F.opexBy,4) : [];
+    let opexCard;
+    if (obars.length) { const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1]))); opexCard = chartCard("OPEX", barChart(obars.map(e=>shortAcct(e[0])),scaleVals(obars.map(e=>e[1]),bsc),"gAdm2",barStopsGreen,null,bsc.unit), [{t:"Beban"+(bsc.unit?" ("+bsc.unit+")":""),c:"#3fae84"}]); }
+    else opexCard = emptyCard("OPEX");
+    // Line keuangan — data real; kosong → empty state
+    let lineCard;
+    if (hasFin) {
+      const lsc = moneyScale(Math.max(1,...F.cashSeries,...F.expSeries,...F.labaSeries.map(Math.abs)));
+      const U = lsc.unit ? " ("+lsc.unit+")" : "";
+      lineCard = chartCard("Pendapatan Kotor vs Beban vs Laba Rugi", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}]);
+    } else lineCard = emptyCard("Pendapatan Kotor vs Beban vs Laba Rugi");
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
         ${donutBlock("Komposisi Kontrak", kontrakDonut, {centerLabel:"Total Kontrak"})}
         ${chartCard("Status Kontrak", barChart(["Aktif","Booking"],[STATS.aktif||0,STATS.booking||0],"gAdm1",barStopsGreen), [{t:"Jumlah Kontrak",c:"#3fae84"}])}
-        ${chartCard("OPEX", barChart(opexCats,opexVals,"gAdm2",barStopsGreen,null,bsc.unit), [{t:"Beban"+BU,c:"#3fae84"}])}
+        ${opexCard}
       </div>
       <div class="grid row-2-3 mt">
-        ${chartCard("Pendapatan Kotor vs Beban vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}])}
+        ${lineCard}
         ${table({ title:"DAFTAR JATUH TEMPO", titleRight:true, cols:COLS.jatuhTempo, data:jatuh, dateKey:"tempo" })}
       </div></div>`;
   }
 
   function marketingOverview() {
-    const nLeads = LEADS.length, nSurvey = SURVEY.length;
+    const leadsP = filterByPeriod(LEADS, "tanggal"), surveyP = filterByPeriod(SURVEY, "tanggal");
+    const nLeads = leadsP.length, nSurvey = surveyP.length;
     const konv = nLeads ? Math.round((nSurvey / nLeads) * 100) : 0;
-    const leadSpark = monthlyCount(filterByPeriod(LEADS, "tanggal"), "tanggal"), survSpark = monthlyCount(filterByPeriod(SURVEY, "tanggal"), "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
+    const leadSpark = monthlyCount(leadsP, "tanggal"), survSpark = monthlyCount(surveyP, "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
     const cards = [
-      { label:"Leads", value:String(nLeads), badge:"15%", dir:"up", good:true, spark:leadSpark, bg:G.mkLeads },
-      { label:"Survey", value:String(nSurvey), badge:"15%", dir:"up", good:true, spark:survSpark, bg:G.mkSurvey, onDark:true },
-      { label:"Konversi Leads-Survey", value:konv+" %", badge:"15%", dir:"up", good:true, spark:survSpark, bg:G.mkConv },
-      { label:"Unit Tersewa", value:String(STATS.occupied ?? 0), badge:"15%", dir:"up", good:true, spark:moveIn, bg:G.mkUnit },
-      { label:"CAC", value:"500 rb", badge:"15%", dir:"down", good:true, spark:leadSpark, bg:G.mkCac },
+      { label:"Leads", value:String(nLeads), spark:leadSpark, bg:G.mkLeads },
+      { label:"Survey", value:String(nSurvey), spark:survSpark, bg:G.mkSurvey, onDark:true },
+      { label:"Konversi Leads-Survey", value:konv+" %", spark:survSpark, bg:G.mkConv },
+      { label:"Unit Tersewa", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.mkUnit },
+      { label:"CAC", value:"—", spark:leadSpark, bg:G.mkCac }, // butuh data biaya marketing → belum ada
     ];
-    // Komposisi channel dari kolom Asal/Sumber leads
-    const chMap = {}; LEADS.forEach(l => { const a = l.asal || "Lainnya"; chMap[a] = (chMap[a] || 0) + 1; });
-    const chTop = Object.entries(chMap).sort((a,b)=>b[1]-a[1]).slice(0,4);
-    const channelDonut = chTop.length ? chTop.map((e,i)=>({t:e[0],value:e[1],c:PAL.marketing[i%4]})) : [{t:"Instagram",value:30,c:PAL.marketing[0]},{t:"Tiktok",value:25,c:PAL.marketing[1]},{t:"WhatsApp",value:28,c:PAL.marketing[2]},{t:"Referral",value:17,c:PAL.marketing[3]}];
-    const chCats = chTop.length ? chTop.map(e=>e[0]) : ["Instagram","Tiktok","WhatsApp","Referral"];
-    const chVals = chTop.length ? chTop.map(e=>e[1]) : [12,16,22,18];
+    // Komposisi channel dari kolom Asal/Sumber leads (periode)
+    const chMap = {}; leadsP.forEach(l => { const a = l.asal || "Lainnya"; chMap[a] = (chMap[a] || 0) + 1; });
+    const chTop = Object.entries(chMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const channelDonut = chTop.map((e,i)=>({t:e[0],value:e[1],c:PAL.marketing[i%4]}));
+    // Tren Leads & Survey sepanjang periode
+    const ts = seriesByDate([{name:"Leads",rows:LEADS,dateKey:"tanggal"},{name:"Survey",rows:SURVEY,dateKey:"tanggal"}], periodRange());
+    const trendCard = ts ? chartCard("Tren Leads & Survey", lineChart(ts.seriesList, ts.labels, ts.names), [{t:"Leads",c:"var(--teal)"},{t:"Survey",c:"var(--text-2)"}]) : emptyCard("Tren Leads & Survey");
+    const funnelCard = (nLeads || nSurvey)
+      ? chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:Math.max(1,Math.round(nSurvey*0.6))}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey / Viewing</span><b>${nSurvey}</b></div></div></div>`, [{t:"Leads",c:"#9a8a78"},{t:"Survey",c:"#d8c8b0"}])
+      : emptyCard("Funnel Penjualan");
+    const channelBar = chTop.length ? chartCard("Leads Channel", barChart(chTop.map(e=>e[0]),chTop.map(e=>e[1]),"gMk1",barStopsWarm), [{t:"Jumlah Leads",c:"#e26d6d"}]) : emptyCard("Leads Channel");
     return `<div class="view">${statGrid(cards,5)}
-      <div class="grid row-3 mt">
-        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:Math.max(1,Math.round(nSurvey*0.6))}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey / Viewing</span><b>${nSurvey}</b></div></div></div>`, [{t:"Leads",c:"#9a8a78"},{t:"Survey",c:"#d8c8b0"}])}
-        ${donutBlock("Komposisi Leads Channel", channelDonut)}
-        ${chartCard("Leads Channel", barChart(chCats,chVals,"gMk1",barStopsWarm), [{t:"Jumlah Leads",c:"#e26d6d"}])}
-      </div>
-      ${table({ title:"DAFTAR FOLLOW UP", cols:COLS.leads, data:LEADS.slice(0,4) })}</div>`;
+      <div class="grid row-2 mt">${trendCard}${donutBlock("Komposisi Leads Channel", channelDonut)}</div>
+      <div class="grid row-2 mt">${funnelCard}${channelBar}</div>
+      ${table({ title:"DAFTAR FOLLOW UP", cols:COLS.leads, data:leadsP.slice(0,4) })}</div>`;
   }
 
   function opsOverview() {
-    const T = TIKET && TIKET.length ? TIKET : null;
-    const nPrev = T ? T.filter(x=>x.jenis==="Preventif").length : 20;
-    const nKor = T ? T.filter(x=>x.jenis==="Korektif").length : 5;
+    const tP = filterByPeriod(TIKET || [], "tanggal");
+    const nPrev = tP.filter(x=>x.jenis==="Preventif").length;
+    const nKor = tP.filter(x=>x.jenis==="Korektif").length;
     const totalTiket = nPrev + nKor;
-    const cost = T ? T.reduce((s,x)=>s+(x._biaya||0),0) : null;
+    const cost = tP.reduce((s,x)=>s+(x._biaya||0),0);
     const defect = totalTiket ? Math.round((nKor/totalTiket)*100) : 0;
-    const tikSpark = monthlyCount(filterByPeriod(TIKET || [], "tanggal"), "tanggal");
-    const korSpark = monthlyCount(filterByPeriod((TIKET || []).filter(x=>x.jenis==="Korektif"), "tanggal"), "tanggal");
-    const prevSpark = monthlyCount(filterByPeriod((TIKET || []).filter(x=>x.jenis==="Preventif"), "tanggal"), "tanggal");
+    const tikSpark = monthlyCount(tP, "tanggal");
+    const korSpark = monthlyCount(tP.filter(x=>x.jenis==="Korektif"), "tanggal");
+    const prevSpark = monthlyCount(tP.filter(x=>x.jenis==="Preventif"), "tanggal");
+    // Metrik tanpa sumber data (jam respon/resolusi/SLA belum ada di sheet) → "—", bukan dummy
     const top = [
-      { label:"Tiket Preventif", value:String(nPrev), badge:"15%", dir:"up", good:true, spark:prevSpark, bg:G.opRed, onDark:true },
-      { label:"Tiket Korektif", value:String(nKor), badge:"15%", dir:"down", good:true, spark:korSpark, bg:G.opOrange, onDark:true },
-      { label:"Defect Rate", value:(T?defect:5)+" %", badge:"15%", dir:"down", good:true, spark:korSpark, bg:G.opTeal },
-      { label:"Downtime", value:"1 h", badge:"15%", dir:"down", good:true, spark:tikSpark, bg:G.opAmber },
-      { label:"Cost", value:cost!=null?fmtRpShort(cost):"159.2 Jt", badge:"15%", dir:"up", good:false, spark:tikSpark, bg:G.opGreen },
+      { label:"Tiket Preventif", value:String(nPrev), spark:prevSpark, bg:G.opRed, onDark:true },
+      { label:"Tiket Korektif", value:String(nKor), spark:korSpark, bg:G.opOrange, onDark:true },
+      { label:"Defect Rate", value:defect+" %", spark:korSpark, bg:G.opTeal },
+      { label:"Total Tiket", value:String(totalTiket), spark:tikSpark, bg:G.opAmber },
+      { label:"Biaya Perbaikan", value:fmtRpShort(cost), spark:tikSpark, bg:G.opGreen },
     ];
     const mid = [
-      { label:"Response Time", value:"30 min", badge:"15%", dir:"down", good:true, spark:tikSpark, bg:G.opOrange, onDark:true },
-      { label:"Resolution Time", value:"10 h", badge:"15%", dir:"down", good:true, spark:tikSpark, bg:G.opRed, onDark:true },
+      { label:"Response Time", value:"—", spark:[], bg:G.opOrange, onDark:true },
+      { label:"Resolution Time", value:"—", spark:[], bg:G.opRed, onDark:true },
     ];
-    const nInspeksi = LOGBOOK.length ? LOGBOOK.filter(r=>r.divisi==="Inspeksi").length : 8;
+    const nInspeksi = filterByPeriod(LOGBOOK, "tanggal").filter(r=>r.divisi==="Inspeksi").length;
     const tiketDonut = [{t:"Preventif",value:nPrev,c:PAL.operasional[0]},{t:"Korektif",value:nKor,c:PAL.operasional[1]},{t:"Inspeksi",value:nInspeksi,c:PAL.operasional[2]}];
-    const Fop = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : FINANCE;
-    const ebars = Fop ? topEntries(Fop.opexBy,4) : [["Listrik",15e6],["Air",22e6],["Perbaikan",18e6],["Perawatan",12e6]];
-    const esc2 = moneyScale(Math.max(1,...ebars.map(e=>e[1])));
-    const expCats = ebars.map(e=>shortAcct(e[0])), expVals = scaleVals(ebars.map(e=>e[1]),esc2);
+    // Expense Category dari keuangan periode — empty state bila kosong
+    const Fop = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : null;
+    const ebars = Fop ? topEntries(Fop.opexBy,4) : [];
+    let expCard;
+    if (ebars.length) { const es = moneyScale(Math.max(1,...ebars.map(e=>e[1]))); expCard = chartCard("Expense Category", barChart(ebars.map(e=>shortAcct(e[0])),scaleVals(ebars.map(e=>e[1]),es),"gOp1",barStopsWarm,null,es.unit), [{t:"Beban"+(es.unit?" ("+es.unit+")":""),c:"#e58a6f"}]); }
+    else expCard = emptyCard("Expense Category");
+    // Tren tiket (Preventif vs Korektif) sepanjang periode
+    const ts = seriesByDate([{name:"Preventif",rows:(TIKET||[]).filter(x=>x.jenis==="Preventif"),dateKey:"tanggal"},{name:"Korektif",rows:(TIKET||[]).filter(x=>x.jenis==="Korektif"),dateKey:"tanggal"}], periodRange());
+    const trendCard = ts ? chartCard("Tren Tiket Maintenance", lineChart(ts.seriesList, ts.labels, ts.names), [{t:"Preventif",c:"var(--teal)"},{t:"Korektif",c:"var(--text-2)"}]) : emptyCard("Tren Tiket Maintenance");
     return `<div class="view">${statGrid(top,5)}
       <div class="grid row-3 mt" style="grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,1fr))">
-        ${chartCard("Expense Category", barChart(expCats,expVals,"gOp1",barStopsWarm,null,esc2.unit), [{t:"Beban"+(esc2.unit?" ("+esc2.unit+")":""),c:"#e58a6f"}])}
+        ${expCard}
         ${statCard(mid[0])}${statCard(mid[1])}
       </div>
-      <div class="grid row-3 mt">
-        ${statCard({ label:"MTTR", value:"50 days", badge:"15%", dir:"down", good:true, spark:tikSpark, bg:G.opYellow })}
-        ${statCard({ label:"SLA", value:"99 %", badge:"15%", dir:"up", good:true, spark:tikSpark, bg:G.opTeal2 })}
-        ${donutBlock("Komposisi Kategori Tiket", tiketDonut)}
-      </div>
-      ${table({ title:"STATUS TIKET", cols:COLS.tiket, data:(TIKET && TIKET.length ? TIKET.slice(0,4) : tiketRows(4)) })}</div>`;
+      <div class="grid row-2 mt">${trendCard}${donutBlock("Komposisi Kategori Tiket", tiketDonut)}</div>
+      ${table({ title:"STATUS TIKET", cols:COLS.tiket, data:(TIKET || []) })}</div>`;
   }
 
   function ownerOverview() {
     // Keuangan dihitung ULANG untuk periode tanggal yang dipilih (line/scorecard/donut ikut berubah)
     const F = TX_ROWS ? computeFinance(TX_ROWS, periodRange()) : null;
-    const moveInRows = filterByPeriod(PENGHUNI, "masuk");
-    const moveIn = monthlyCount(moveInRows, "masuk"); // tren penghuni masuk (periode)
-    const cashSpark = F ? F.cashSeries : moveIn, labaSpark = F ? F.labaSeries : moveIn, opexSpark = F ? F.expSeries : moveIn;
+    const hasFin = F && F.nBuckets >= 1;
+    const moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
     const cards = [
-      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"—", spark:cashSpark, bg:G.ownPrimary, onDark:true },
-      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"—", spark:labaSpark, bg:G.ownPrimary, onDark:true },
+      { label:"Pendapatan Kotor", value:fmtRpShort(F ? F.pendapatanKotor : 0), spark:F ? F.cashSeries : [], bg:G.ownPrimary, onDark:true },
+      { label:"Laba Bersih", value:fmtRpShort(F ? F.labaBersih : 0), spark:F ? F.labaSeries : [], bg:G.ownPrimary, onDark:true },
       { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", spark:moveIn, bg:G.ownRose, onDark:true },
-      { label:"OPEX", value:F?fmtRpShort(F.beban):"—", spark:opexSpark, bg:G.ownGray, onDark:true },
+      { label:"OPEX", value:fmtRpShort(F ? F.beban : 0), spark:F ? F.expSeries : [], bg:G.ownGray, onDark:true },
       { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), spark:moveIn, bg:G.ownGray, onDark:true },
       { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.ownRose, onDark:true },
     ];
-    const opex = F ? topEntries(F.opexBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:3500000,c:PAL.owner[0]},{t:"Gaji",value:3000000,c:PAL.owner[1]},{t:"Perawatan",value:2000000,c:PAL.owner[2]},{t:"Marketing",value:1500000,c:PAL.owner[3]}];
-    const income = F ? topEntries(F.incomeBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:20000000,c:PAL.owner[0]},{t:"Denda",value:800000,c:PAL.owner[1]},{t:"Listrik",value:1200000,c:PAL.owner[2]}];
+    const opex = F ? topEntries(F.opexBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [];
+    const income = F ? topEntries(F.incomeBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [];
     const kamar = [{t:"Terisi",value:STATS.aktif||0,c:PAL.owner[0]},{t:"Booking",value:STATS.booking||0,c:PAL.owner[1]},{t:"Kosong",value:STATS.kosong||0,c:PAL.owner[2]}];
-    // Line chart: deret periode (raw Rp) → satuan uang otomatis
-    const hasFin = F && F.nBuckets >= 1;
-    const lineLab = hasFin ? F.labels : ["Jan","Feb","Mar","Apr","Mei","Jun","Jul"];
-    const cashR = hasFin ? F.cashSeries : [8e6,12e6,10e6,18e6,15e6,24e6,20e6];
-    const expR  = hasFin ? F.expSeries  : [12e6,9e6,14e6,11e6,17e6,13e6,22e6];
-    const labaR = hasFin ? F.labaSeries : cashR.map((v,i)=>v-expR[i]);
-    const lsc = moneyScale(Math.max(1,...cashR,...expR,...labaR.map(Math.abs)));
-    const lineInc = scaleVals(cashR,lsc), lineExp = scaleVals(expR,lsc), lineLaba = scaleVals(labaR,lsc);
-    const U = lsc.unit ? " ("+lsc.unit+")" : "";
-    // Bar Beban Operasional: raw Rp → satuan otomatis, warna brand owner
-    const obars = F ? topEntries(F.opexBy,5) : [["Internet",10e6],["Listrik",22e6],["Perawatan",14e6],["Gaji",26e6],["Marketing",12e6]];
-    const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1])));
-    const opexCats = obars.map(e=>shortAcct(e[0])), opexVals = scaleVals(obars.map(e=>e[1]),bsc);
+    // Line keuangan — data real; kosong → empty state
+    let lineCard;
+    if (hasFin) {
+      const lsc = moneyScale(Math.max(1,...F.cashSeries,...F.expSeries,...F.labaSeries.map(Math.abs)));
+      const U = lsc.unit ? " ("+lsc.unit+")" : "";
+      lineCard = chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}]);
+    } else lineCard = emptyCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi");
+    // Bar Beban Operasional — data real; kosong → empty state
+    const obars = F ? topEntries(F.opexBy,5) : [];
+    let barCard;
+    if (obars.length) { const bsc = moneyScale(Math.max(1,...obars.map(e=>e[1]))); barCard = chartCard("Beban Operasional", barChart(obars.map(e=>shortAcct(e[0])),scaleVals(obars.map(e=>e[1]),bsc),"gOwn1",barStopsOwner,null,bsc.unit), [{t:"Beban"+(bsc.unit?" ("+bsc.unit+")":""),c:OWN_BAR}]); }
+    else barCard = emptyCard("Beban Operasional");
     return `<div class="view">${statGrid(cards,6)}
       <div class="grid row-2 mt">
-        ${chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi", lineChart([lineInc,lineExp,lineLaba],lineLab,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}])}
-        ${chartCard("Beban Operasional", barChart(opexCats,opexVals,"gOwn1",barStopsOwner,null,bsc.unit), [{t:"Beban"+(bsc.unit?" ("+bsc.unit+")":""),c:OWN_BAR}])}
+        ${lineCard}
+        ${barCard}
       </div>
       <div class="grid row-3 mt">${donutBlock("Komposisi OPEX",opex,{money:true,centerLabel:"Total OPEX"})}${donutBlock("Komposisi Income",income,{money:true,centerLabel:"Total Income"})}${donutBlock("Komposisi Status Kamar",kamar,{centerLabel:"Total Kamar"})}</div></div>`;
   }
 
   function salesOverview() {
-    const B = BOOKING && BOOKING.length ? BOOKING : null;
-    const nLeads = LEADS.length, nSurvey = SURVEY.length;
-    const nBooking = B ? B.length : 25;
-    const nCancel = B ? B.filter(x=>/batal|cancel/i.test(x.status || "")).length : 0;
+    const bookingP = filterByPeriod(BOOKING || [], "tanggal"), leadsP = filterByPeriod(LEADS, "tanggal"), surveyP = filterByPeriod(SURVEY, "tanggal");
+    const nLeads = leadsP.length, nSurvey = surveyP.length, nBooking = bookingP.length;
+    const nCancel = bookingP.filter(x=>/batal|cancel/i.test(x.status || "")).length;
     const cancelRate = nBooking ? Math.round((nCancel / nBooking) * 100) : 0;
     const convRate = nLeads ? ((nBooking / nLeads) * 100).toFixed(1).replace(".", ",") : "0";
-    const durs = B ? B.map(x=>parseInt(String(x.durasi).replace(/[^0-9]/g,""),10)).filter(n=>n>0) : [];
-    const avgDur = durs.length ? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length) : 9;
-    const bookSpark = monthlyCount(filterByPeriod(BOOKING || [], "tanggal"), "tanggal"), survSpark = monthlyCount(filterByPeriod(SURVEY, "tanggal"), "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
+    const durs = bookingP.map(x=>parseInt(String(x.durasi).replace(/[^0-9]/g,""),10)).filter(n=>n>0);
+    const avgDur = durs.length ? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length) : 0;
+    const bookSpark = monthlyCount(bookingP, "tanggal"), survSpark = monthlyCount(surveyP, "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
     const cards = [
-      { label:"Booking", value:String(nBooking), badge:"15%", dir:"up", good:true, spark:bookSpark, bg:G.salePink },
-      { label:"Cancellation Rate", value:(B?cancelRate:5)+" %", badge:"15%", dir:"down", good:true, spark:bookSpark, bg:G.saleRed },
-      { label:"Conversion Rate", value:(B?convRate:"2,5")+" %", badge:"15%", dir:"up", good:true, spark:survSpark, bg:G.saleGold },
-      { label:"Retention Rate", value:"98 %", badge:"15%", dir:"up", good:true, spark:moveIn, bg:G.salePeach }, // dummy: butuh Tgl Keluar
-      { label:"AVG Durasi Sewa", value:avgDur+" bln", badge:"15%", dir:"up", good:true, spark:moveIn, bg:G.salePink },
-      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"15%", dir:"up", good:true, spark:moveIn, bg:G.saleGold },
+      { label:"Booking", value:String(nBooking), spark:bookSpark, bg:G.salePink },
+      { label:"Cancellation Rate", value:cancelRate+" %", spark:bookSpark, bg:G.saleRed },
+      { label:"Conversion Rate", value:convRate+" %", spark:survSpark, bg:G.saleGold },
+      { label:"Retention Rate", value:"—", spark:[], bg:G.salePeach }, // butuh Tgl Keluar di sheet
+      { label:"AVG Durasi Sewa", value:avgDur?avgDur+" bln":"—", spark:moveIn, bg:G.salePink },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.saleGold },
     ];
-    const prospekDonut = B ? [{t:"Leads",value:nLeads||1,c:PAL.sales[0]},{t:"Booking",value:nBooking,c:PAL.sales[1]},{t:"Cancel",value:nCancel,c:PAL.sales[2]}] : [{t:"Leads",value:140,c:PAL.sales[0]},{t:"Booking",value:41,c:PAL.sales[1]},{t:"Cancel",value:14,c:PAL.sales[2]}];
+    const prospekDonut = [{t:"Leads",value:nLeads,c:PAL.sales[0]},{t:"Booking",value:nBooking,c:PAL.sales[1]},{t:"Cancel",value:nCancel,c:PAL.sales[2]}];
     const kontrak = STATS.occupied || 0;
-    // Kategori prospek dari kolom Asal survey (dinamis)
-    const spMap = {}; SURVEY.forEach(s => { const a = s.asal || "Lainnya"; spMap[a] = (spMap[a] || 0) + 1; });
-    const spTop = Object.entries(spMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
-    const spCats = spTop.length ? spTop.map(e=>e[0]) : ["Instagram","TikTok","WhatsApp","Referral","Walk-in"];
-    const spVals = spTop.length ? spTop.map(e=>e[1]) : [14,20,24,16,8];
+    // Tren Booking sepanjang periode
+    const ts = seriesByDate([{name:"Booking",rows:BOOKING||[],dateKey:"tanggal"},{name:"Survey",rows:SURVEY,dateKey:"tanggal"}], periodRange());
+    const trendCard = ts ? chartCard("Tren Booking & Survey", lineChart(ts.seriesList, ts.labels, ts.names), [{t:"Booking",c:"var(--teal)"},{t:"Survey",c:"var(--text-2)"}]) : emptyCard("Tren Booking & Survey");
+    // Kategori prospek dari kolom Asal survey (periode)
+    const spMap = {}; surveyP.forEach(s => { const a = s.asal || "Lainnya"; spMap[a] = (spMap[a] || 0) + 1; });
+    const spTop = Object.entries(spMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const kategoriCard = spTop.length ? chartCard("Kategori Prospek", barChart(spTop.map(e=>e[0]),spTop.map(e=>e[1]),"gSale1",barStopsWarm), [{t:"Jumlah Prospek",c:"#e58a6f"}]) : emptyCard("Kategori Prospek");
+    const funnelCard = (nLeads || nSurvey || nBooking)
+      ? chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:nBooking||1},{value:kontrak||1}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey</span><b>${nSurvey}</b></div><div><span>Booking</span><b>${nBooking}</b></div><div><span>Kontrak</span><b>${kontrak}</b></div></div></div>`, [{t:"Leads",c:"#7a6f63"},{t:"Survey",c:"#9a8a78"},{t:"Booking",c:"#b8a890"},{t:"Kontrak",c:"#d8c8b0"}])
+      : emptyCard("Funnel Penjualan");
     return `<div class="view">${statGrid(cards,6)}
-      <div class="grid row-3 mt">
-        ${chartCard("Funnel Penjualan", `<div class="funnel-wrap">${funnel([{value:nLeads||1},{value:nSurvey||1},{value:nBooking||1},{value:kontrak||1}])}<div class="funnel-stats"><div><span>Leads masuk</span><b>${nLeads}</b></div><div><span>Survey</span><b>${nSurvey}</b></div><div><span>Booking</span><b>${nBooking}</b></div><div><span>Kontrak</span><b>${kontrak}</b></div></div></div>`, [{t:"Leads",c:"#7a6f63"},{t:"Survey",c:"#9a8a78"},{t:"Booking",c:"#b8a890"},{t:"Kontrak",c:"#d8c8b0"}])}
-        ${donutBlock("Komposisi Prospek", prospekDonut)}
-        ${chartCard("Kategori Prospek", barChart(spCats,spVals,"gSale1",barStopsWarm), [{t:"Jumlah Prospek",c:"#e58a6f"}])}
-      </div>
+      <div class="grid row-2 mt">${trendCard}${donutBlock("Komposisi Prospek", prospekDonut)}</div>
+      <div class="grid row-2 mt">${funnelCard}${kategoriCard}</div>
       ${table({ title:"DAFTAR PROSPEK", cols:COLS.prospek, data:surveyRows() })}</div>`;
   }
 
@@ -1180,23 +1204,13 @@
     const heads = [...block.querySelectorAll("thead tr:first-child th")];
     const cellText = (tr, i) => (tr.cells[i]?.textContent || "").trim();
 
-    // gabungkan search global + semua filter kolom (AND)
+    // Satu search bar mewakili SEMUA kolom (tanpa filter per-kolom)
     const search = block.querySelector('[data-act="tsearch"]');
-    const colFilters = [...block.querySelectorAll(".col-filter")];
     const applyFilters = () => {
       const gq = (search?.value || "").toLowerCase();
-      const active = colFilters.map(inp => ({ i: +inp.dataset.fcol, q: inp.value.toLowerCase() })).filter(f => f.q);
-      dataRows().forEach(tr => {
-        const okGlobal = !gq || tr.textContent.toLowerCase().includes(gq);
-        const okCols = active.every(f => cellText(tr, f.i).toLowerCase().includes(f.q));
-        tr.style.display = (okGlobal && okCols) ? "" : "none";
-      });
+      dataRows().forEach(tr => { tr.style.display = (!gq || tr.textContent.toLowerCase().includes(gq)) ? "" : "none"; });
     };
     search?.addEventListener("input", applyFilters);
-    colFilters.forEach(inp => {
-      inp.addEventListener("input", applyFilters);
-      inp.addEventListener("click", (e) => e.stopPropagation()); // jangan picu sort header
-    });
 
     // sort per kolom: klik header → toggle asc/desc, indikator ▲/▼
     heads.forEach((th, i) => {
