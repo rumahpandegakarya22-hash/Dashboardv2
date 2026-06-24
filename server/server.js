@@ -233,8 +233,29 @@ async function readAllSheets() {
 /* -------------------------------------------------------------- app */
 const app = express();
 app.set("trust proxy", 1); // di belakang proxy Railway (rate-limit & secure cookie)
-app.use(express.json());
+app.disable("x-powered-by");
+app.use(express.json({ limit: "64kb" })); // batasi ukuran body (anti payload besar)
 app.use(cookieParser());
+
+// Security headers + Content-Security-Policy (defense-in-depth terhadap XSS/clickjacking).
+// script-src 'self' memblokir inline-script & URL javascript:; style 'unsafe-inline' + Google Fonts
+// diizinkan karena UI memakai style attribut & font Inter; img data: untuk QR code 2FA.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  res.setHeader("Content-Security-Policy", [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'",
+  ].join("; "));
+  next();
+});
 
 const cookieOpts = { httpOnly: true, sameSite: "lax", secure: IS_PROD, maxAge: COOKIE_MAXAGE };
 function issueSession(res, user) {
@@ -265,8 +286,11 @@ const authLimiter = rateLimit({
 app.post("/api/register", authLimiter, async (req, res) => {
   const { username, password, name } = req.body || {};
   if (!username || !password || !name) return res.status(400).json({ error: "Nama, username, dan password wajib diisi" });
-  if (String(username).trim().length < 3) return res.status(400).json({ error: "Username minimal 3 karakter" });
-  if (String(password).length < 8) return res.status(400).json({ error: "Password minimal 8 karakter" });
+  const uname = String(username).trim(), uname_name = String(name).trim();
+  if (uname.length < 3 || uname.length > 32) return res.status(400).json({ error: "Username 3–32 karakter" });
+  if (!/^[a-zA-Z0-9._-]+$/.test(uname)) return res.status(400).json({ error: "Username hanya boleh huruf, angka, titik, garis bawah, dan strip" });
+  if (uname_name.length < 1 || uname_name.length > 60) return res.status(400).json({ error: "Nama maksimal 60 karakter" });
+  if (String(password).length < 8 || String(password).length > 200) return res.status(400).json({ error: "Password 8–200 karakter" });
   let users;
   try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
   if (findUser(users, username)) return res.status(409).json({ error: "Username sudah dipakai" });
@@ -414,7 +438,10 @@ app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
 app.post("/api/documents", requireAuth, async (req, res) => {
   const role = req.user.role;
   const { type = "sheet", name } = req.body || {};
-  const title = name || `${role}-doc-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-4)}`;
+  if (type !== "sheet" && type !== "doc") return res.status(400).json({ error: "Tipe dokumen tidak valid" });
+  // judul: buang karakter kontrol/baris-baru, batasi 100 karakter
+  const cleaned = String(name || "").split("").filter(ch => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) !== 127).join("").trim().slice(0, 100);
+  const title = cleaned || `${role}-doc-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-4)}`;
   if (!drive || !driveFolders[role]) {
     return res.status(503).json({ error: "Integrasi Google Drive belum dikonfigurasi di server.", setup: true });
   }
@@ -430,12 +457,41 @@ app.post("/api/documents", requireAuth, async (req, res) => {
   }
 });
 
-/* ---- GET /api/sheets  → data live dari spreadsheet (read-only, cached) ---- */
-app.get("/api/sheets", requireAuth, async (_req, res) => {
+/* ---- Akses data per role (RLS) ----
+   Tiap role hanya menerima tab yang relevan; finance (3_KEUANGAN) hanya untuk
+   owner & admin. Kolom PII penghuni (email/kontak/tgl lahir) disembunyikan dari
+   role non-owner/admin. Owner = semua. Filter dilakukan di SERVER (klien tak
+   bisa di-bypass). */
+const SHEET_ACCESS = {
+  admin:       [/penghuni/i, /keuangan|transaksi|jurnal|kas\b/i, /vendor/i, /dokumen/i, /logbook/i, /parameter/i, /akun|coa/i, /kamar/i],
+  marketing:   [/leads/i, /survey/i, /post/i, /promo/i, /marketing/i, /dokumen/i, /logbook/i, /parameter/i, /kamar/i, /penghuni/i],
+  sales:       [/leads/i, /survey/i, /booking/i, /penghuni/i, /kamar/i, /dokumen/i, /logbook/i, /parameter/i],
+  operasional: [/preventive|corrective|maintenance|inspeksi|perawatan|perbaikan/i, /vendor/i, /kamar/i, /penghuni/i, /dokumen/i, /logbook/i, /parameter/i],
+};
+const PII_COLS = /email|kontak|darurat|nama kontak|tgl lahir|tanggal lahir|usia/i;
+function filterSheetsForRole(sheets, role) {
+  if (role === "owner") return sheets;
+  const allow = SHEET_ACCESS[role] || [];
+  const out = {};
+  for (const [title, rows] of Object.entries(sheets)) {
+    if (!allow.some((re) => re.test(title))) continue; // tab tidak diizinkan untuk role ini
+    if (/penghuni/i.test(title) && role !== "admin" && Array.isArray(rows) && rows.length) {
+      const header = (rows[0] || []).map((h) => String(h));
+      const drop = header.map((h, i) => (PII_COLS.test(h) ? i : -1)).filter((i) => i >= 0);
+      out[title] = drop.length ? rows.map((r) => r.filter((_, i) => !drop.includes(i))) : rows;
+    } else {
+      out[title] = rows;
+    }
+  }
+  return out;
+}
+
+/* ---- GET /api/sheets  → data live dari spreadsheet (read-only, cached, di-RLS) ---- */
+app.get("/api/sheets", requireAuth, async (req, res) => {
   if (!sheetsApi || !spreadsheetId) return res.json({ configured: false, sheets: {} });
   try {
     const sheets = await readAllSheets();
-    res.json({ configured: true, sheets });
+    res.json({ configured: true, sheets: filterSheetsForRole(sheets, req.user.role) });
   } catch (e) {
     res.status(502).json({ configured: true, error: "Gagal membaca spreadsheet: " + e.message, sheets: {} });
   }
@@ -443,27 +499,16 @@ app.get("/api/sheets", requireAuth, async (_req, res) => {
 
 /* ---- GET /api/health  → diagnosa konfigurasi (tanpa membocorkan rahasia) ---- */
 app.get("/api/health", async (_req, res) => {
+  // Hanya boolean status — TIDAK membocorkan nama env, jumlah, panjang token, atau pesan error
+  // mentah (mengurangi recon untuk penyerang). Cukup untuk cek "hidup & terkonfigurasi".
   const out = {
     ok: true,
-    nodeEnv: process.env.NODE_ENV || null,
-    hasJwtEnv: !!process.env.JWT_SECRET,
     redisConfigured: USE_REDIS,
-    // diagnosa nama env (TANPA value) untuk mendeteksi nama/scope/project yang salah
-    storageEnvKeys: Object.keys(process.env).filter((k) => /upstash|redis|kv_/i.test(k)),
-    totalEnvKeys: Object.keys(process.env).length,
-    urlLen: REDIS_URL.length,
-    tokenLen: REDIS_TOKEN.length,
-    // diagnosa integrasi Google Sheets (data live dashboard)
     sheetsConfigured: !!sheetsApi,
-    sheetsSource,
-    hasServiceAccountEnv: !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_B64 || process.env.GCP_SERVICE_ACCOUNT_JSON),
-    spreadsheetIdSet: !!spreadsheetId,
   };
   if (USE_REDIS) {
     try { await redisGet("ktd:health"); out.redisOk = true; }
-    catch (e) { out.redisOk = false; out.redisError = e.message; }
-  } else {
-    out.note = "Upstash belum dikonfigurasi — server pakai file (gagal di FS read-only seperti Vercel). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN lalu redeploy.";
+    catch { out.redisOk = false; }
   }
   res.json(out);
 });

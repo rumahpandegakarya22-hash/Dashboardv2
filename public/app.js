@@ -8,6 +8,11 @@
   "use strict";
 
   /* ------------------------------------------------------------------ utils */
+  // esc(): escape HTML supaya data dari spreadsheet/registrasi tidak bisa meng-inject
+  // markup/script saat dirender via innerHTML. safeUrl(): hanya izinkan http(s)/mailto/tel
+  // (blokir javascript:, data:, dll) untuk href tombol/link.
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const safeUrl = (u) => { const s = String(u == null ? "" : u).trim(); return /^(https?:\/\/|mailto:|tel:)/i.test(s) ? s : "#"; };
   const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
   const initials = (name) => (name || "?").split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase();
   const slug = (s) => String(s || "").toLowerCase().replace(/[()]/g, "").trim().replace(/\s+/g, "-");
@@ -55,7 +60,7 @@
     let offset = 0;
     const rings = segments.map((s) => {
       const len = (s.value / total) * C, pct = Math.round((s.value / total) * 100);
-      const ring = `<circle class="donut__seg" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${len - 4} ${C - len + 4}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" data-tip-label="${s.label || ""}" data-tip-value="${s.value} (${pct}%)" data-tip-color="${s.color}"/>`;
+      const ring = `<circle class="donut__seg" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${len - 4} ${C - len + 4}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" data-tip-label="${esc(s.label || "")}" data-tip-value="${esc(s.value + " (" + pct + "%)")}" data-tip-color="${s.color}"/>`;
       offset += len; return ring;
     }).join("");
     const ctr = center ? `<div class="donut__center"><small>${center.label}</small><b>${center.value}</b></div>` : "";
@@ -72,8 +77,8 @@
     const bars = vals.map((v, i) => {
       const bh = (v / max) * ch, x = padL + gap * i + gap / 2 - bw / 2, y = padT + ch - bh;
       return `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="${bw / 2}" fill="url(#${gradId})"/>
-        <text class="chart-val" x="${x + bw / 2}" y="${y - 5}" text-anchor="middle">${v}</text>
-        <text class="chart-cat" x="${x + bw / 2}" y="${h - 8}" text-anchor="middle">${cats[i]}</text>`;
+        <text class="chart-val" x="${x + bw / 2}" y="${y - 5}" text-anchor="middle">${esc(v)}</text>
+        <text class="chart-cat" x="${x + bw / 2}" y="${h - 8}" text-anchor="middle">${esc(cats[i])}</text>`;
     }).join("");
     return `<div class="chart"><svg viewBox="0 0 ${w} ${h}"><defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">${gradStops}</linearGradient></defs>${grid}${bars}</svg></div>`;
   }
@@ -112,7 +117,7 @@
     return `<div class="funnel"><svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">${parts}</svg></div>`;
   }
 
-  const chartLegend = (items) => `<div class="chart-legend">${items.map(i => `<span class="legend-item"><i style="background:${i.c}"></i>${i.t}</span>`).join("")}</div>`;
+  const chartLegend = (items) => `<div class="chart-legend">${items.map(i => `<span class="legend-item"><i style="background:${i.c}"></i>${esc(i.t)}</span>`).join("")}</div>`;
   const chartCard = (title, inner, legendItems) => `<div class="card"><div class="card__title">${title}</div>${inner}${legendItems ? chartLegend(legendItems) : ""}</div>`;
   // donut block with title + legend that matches the segments
   function donutBlock(label, segs, centerLabel) {
@@ -320,8 +325,8 @@
     const dark = c.onDark ? " on-dark" : "";
     const dir = c.dir === "down" ? I.down : I.up;
     return `<article class="stat-card${dark}" style="background:${c.bg}">
-      <span class="stat-card__label">${c.label}</span><span class="stat-card__value">${c.value}</span>
-      ${c.badge ? `<span class="stat-card__badge">${dir}${c.badge}</span>` : ""}
+      <span class="stat-card__label">${esc(c.label)}</span><span class="stat-card__value">${esc(c.value)}</span>
+      ${c.badge ? `<span class="stat-card__badge">${dir}${esc(c.badge)}</span>` : ""}
       <span class="stat-card__wave">${wave(c.seed || 1)}</span></article>`;
   }
   const statGrid = (cards, cols) => `<section class="stat-grid" style="--cols:${cols}">${cards.map(statCard).join("")}</section>`;
@@ -340,7 +345,7 @@
   }
   // action buttons
   const waBtn = (num, label) => `<a class="cell-btn cell-btn--wa" href="https://wa.me/${digits(num)}" target="_blank" rel="noopener">${I.wa}${label || "WhatsApp"}</a>`;
-  const openBtn = (url) => `<a class="cell-btn cell-btn--open" href="${url || "#"}" target="_blank" rel="noopener">${I.link} OPEN</a>`;
+  const openBtn = (url) => `<a class="cell-btn cell-btn--open" href="${esc(safeUrl(url))}" target="_blank" rel="noopener">${I.link} OPEN</a>`;
   const tagihanBtn = (num) => `<a class="cell-btn cell-btn--wa" href="https://wa.me/${digits(num)}?text=Halo,%20berikut%20tagihan%20kost%20Anda." target="_blank" rel="noopener">${I.wa} Kirim</a>`;
 
   /* ---- parsing tanggal Indonesia + rentang periode (filter sidebar) ---- */
@@ -397,21 +402,21 @@
     const body = data.map(r => {
       const tds = cols.map(col => {
         const k = col.key, v = r[k];
-        if (DATE_KEYS.has(k)) return `<td><span class="cell-date">${I.cal}${v ?? ""}</span></td>`;
+        if (DATE_KEYS.has(k)) return `<td><span class="cell-date">${I.cal}${esc(v ?? "")}</span></td>`;
         switch (k) {
           case "check":     return `<td><span class="cbox ${r.sel ? "on" : ""}"></span></td>`;
-          case "name":      return `<td><span class="cell-name"><span class="avatar">${initials(r.nama || r.name || v)}</span>${r.nama || r.name || v}</span></td>`;
-          case "kostStatus":return `<td><span class="status ${KOST_CLASS[r.status] || ""}">${r.status}</span></td>`;
+          case "name":      return `<td><span class="cell-name"><span class="avatar">${esc(initials(r.nama || r.name || v))}</span>${esc(r.nama || r.name || v)}</span></td>`;
+          case "kostStatus":return `<td><span class="status ${KOST_CLASS[r.status] || ""}">${esc(r.status)}</span></td>`;
           case "status":
           case "jenisTx":
-          case "prioritas": return v && v.t ? `<td><span class="status ${v.c}">${v.t}</span></td>` : `<td>${v ?? ""}</td>`;
+          case "prioritas": return v && v.t ? `<td><span class="status ${esc(v.c)}">${esc(v.t)}</span></td>` : `<td>${esc(v ?? "")}</td>`;
           case "logStatus": return `<td>${dropdown("log", v)}</td>`;
           case "hasil":     return `<td>${dropdown("hasil", v)}</td>`;
           case "aksi":      return `<td>${waBtn(r.wa, "Chat")}</td>`;
           case "open":      return `<td>${openBtn(r.link)}</td>`;
           case "tagihan":   return `<td>${tagihanBtn(r.wa)}</td>`;
-          case "id":        return `<td class="cell-id">${v ?? ""}</td>`;
-          default:          return `<td>${v ?? ""}</td>`;
+          case "id":        return `<td class="cell-id">${esc(v ?? "")}</td>`;
+          default:          return `<td>${esc(v ?? "")}</td>`;
         }
       }).join("");
       return `<tr class="${r.sel ? "is-selected" : ""}">${tds}</tr>`;
@@ -814,8 +819,8 @@
       <div class="side-section"><div class="side-section__title">Dashboards</div>${dashItems.map(navItem).join("")}</div>
       <div class="side-section"><div class="side-section__title">Pages</div>${pageItems.map(navItem).join("")}</div>
       <div class="side-user">
-        <span class="avatar">${initials(cur.user || r.label)}</span>
-        <div class="side-user__meta"><b>${cur.user || r.label}</b><small>Masuk sebagai ${role}${cur.tfaEnabled ? " · 2FA" : ""}</small></div>
+        <span class="avatar">${esc(initials(cur.user || r.label))}</span>
+        <div class="side-user__meta"><b>${esc(cur.user || r.label)}</b><small>Masuk sebagai ${esc(role)}${cur.tfaEnabled ? " · 2FA" : ""}</small></div>
         <button class="side-logout" id="securityBtn" aria-label="Akun & Keamanan" title="Akun & Keamanan">${I.lock}</button>
         <button class="side-logout" id="logoutBtn" aria-label="Keluar" title="Keluar">${I.logout}</button>
       </div></aside>`;
@@ -991,8 +996,8 @@
       let users = [];
       try { const r = await fetch("/api/users"); if (r.ok) users = await r.json(); } catch {}
       const badge = (s) => `<span class="status ${s==="active"?"s-complete":s==="pending"?"s-pending":"s-progress"}">${s}</span>`;
-      const rows = users.map(u => `<tr data-u="${u.username}">
-        <td>${u.name}</td><td class="cell-id">${u.username}</td><td>${u.role || "-"}</td><td>${badge(u.status)}</td>
+      const rows = users.map(u => `<tr data-u="${esc(u.username)}">
+        <td>${esc(u.name)}</td><td class="cell-id">${esc(u.username)}</td><td>${esc(u.role || "-")}</td><td>${badge(u.status)}</td>
         <td>${u.status==="pending"
           ? `<select class="cell-select sec-role"><option value="sales">sales</option><option value="operasional">operasional</option><option value="marketing">marketing</option><option value="admin">admin</option><option value="owner">owner</option></select>
              <button class="cell-btn sec-approve">Setujui</button>`
