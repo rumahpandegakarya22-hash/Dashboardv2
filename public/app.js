@@ -29,7 +29,13 @@
     const s = (Array.isArray(series) && series.length > 1) ? series.map(Number) : [0, 0];
     const w = 120, h = 34, max = Math.max(...s), min = Math.min(...s), rng = (max - min) || 1;
     const X = (i) => (i / (s.length - 1)) * w, Y = (v) => h - 3 - ((v - min) / rng) * (h - 6);
-    const d = s.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(" ");
+    const pts = s.map((v, i) => [X(i), Y(v)]);
+    let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0,y0]=pts[Math.max(0,i-1)],[x1,y1]=pts[i],[x2,y2]=pts[i+1],[x3,y3]=pts[Math.min(pts.length-1,i+2)];
+      const cp1x=x1+(x2-x0)/6,cp1y=y1+(y2-y0)/6,cp2x=x2-(x3-x1)/6,cp2y=y2-(y3-y1)/6;
+      d += ` C${cp1x.toFixed(1)} ${cp1y.toFixed(1)} ${cp2x.toFixed(1)} ${cp2y.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+    }
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${color || "rgba(255,255,255,.65)"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   };
   // hitung jumlah baris per bulan (untuk sparkline metrik berbasis tanggal)
@@ -115,7 +121,7 @@
     const all = series.flat().map(Number);
     const rawMax = Math.max(1, ...all), rawMin = Math.min(0, ...all), span = (rawMax - rawMin) || 1;
     const X = (i, len) => padL + (i / Math.max(1, len - 1)) * cw, Y = (v) => padT + ch - ((Number(v) - rawMin) / span) * ch;
-    const path = (s) => { let d = ""; s.forEach((v, i) => { const x = X(i, s.length), y = Y(v); if (i === 0) { d += `M ${x} ${y}`; return; } const px = X(i - 1, s.length), py = Y(s[i - 1]), mx = (px + x) / 2; d += ` C ${mx} ${py}, ${mx} ${y}, ${x} ${y}`; }); return d; };
+    const path = (s) => { if (!s.length) return ""; const pts = s.map((v, i) => [X(i, s.length), Y(v)]); let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`; for (let i = 0; i < pts.length - 1; i++) { const [x0,y0]=pts[Math.max(0,i-1)],[x1,y1]=pts[i],[x2,y2]=pts[i+1],[x3,y3]=pts[Math.min(pts.length-1,i+2)]; const cp1x=x1+(x2-x0)/6,cp1y=y1+(y2-y0)/6,cp2x=x2-(x3-x1)/6,cp2y=y2-(y3-y1)/6; d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`; } return d; };
     const dots = (s, color, name) => s.map((v, i) => {
       const x = X(i, s.length), y = Y(v);
       return `<circle cx="${x}" cy="${y}" r="10" fill="transparent" class="line-hit" data-tip-label="${esc(name + " · " + (xLabels[i] || ""))}" data-tip-value="${esc(fmtNum(v, unit))}" data-tip-color="${color}"/><circle cx="${x}" cy="${y}" r="3" fill="var(--card)" stroke="${color}" stroke-width="2"/>`;
@@ -536,9 +542,9 @@
     mkUnit:"linear-gradient(150deg,#ecd07a,#c79a2a)", mkCac:"linear-gradient(150deg,#d8c4ee,#a98fd0)",
     opRed:"linear-gradient(150deg,#e8806f,#c0473a)", opOrange:"linear-gradient(150deg,#ec8a5f,#c75f2a)", opTeal:"linear-gradient(150deg,#7fd6c7,#2f8f9a)",
     opAmber:"linear-gradient(150deg,#ecc27a,#c7872a)", opGreen:"linear-gradient(150deg,#9ad68a,#4a8a3a)", opYellow:"linear-gradient(150deg,#ecd87a,#c7a02a)", opTeal2:"linear-gradient(150deg,#7fd6b7,#2f9a7a)",
-    ownCyan:"linear-gradient(150deg,#CF7B72,#C92D31)",    // dusty rose → crimson (brand utama Owner)
-    ownDark:"linear-gradient(150deg,#C92D31,#3A3635)",    // crimson → charcoal (premium)
-    ownNeutral:"linear-gradient(150deg,#8E8B87,#3A3635)", // gray → charcoal (OPEX/Kosong)
+    ownPrimary:"linear-gradient(135deg,#3A3635 0%,#CF7B72 65%,#F2D5CF 100%)", // charcoal→rose→blush
+    ownRose:   "linear-gradient(150deg,#3A3635,#CF7B72)",                      // charcoal→dusty rose
+    ownGray:   "linear-gradient(150deg,#3A3635,#8E8B87)",                      // charcoal→warm gray
     salePink:"linear-gradient(150deg,#f3cdd0,#e89aa0)", saleRed:"linear-gradient(150deg,#f0a0a8,#d0506a)", saleGold:"linear-gradient(150deg,#ecc99a,#c79a5a)", salePeach:"linear-gradient(150deg,#f0b89a,#d07a5a)",
   };
   const barStopsGreen = '<stop offset="0%" stop-color="#8ce0a0"/><stop offset="100%" stop-color="#2f8f7a"/>';
@@ -550,7 +556,7 @@
     admin:["#6ad17f","#4ed7c7","#c7d86a"],
     marketing:["#e26d6d","#c0397a","#ecd07a","#a98fd0"],
     operasional:["#c0473a","#ec8a5f","#2f8f9a"],
-    owner:["#C92D31","#CF7B72","#3A3635","#F2D5CF"], // palet brand Owner: crimson, dusty rose, charcoal, blush
+    owner:["#CF7B72","#F2D5CF","#8E8B87","#C92D31"], // dusty rose, blush, warm gray, crimson (prioritas brand)
     sales:["#e89aa0","#d0506a","#c79a5a"],
   };
 
@@ -659,12 +665,12 @@
     const moveIn = monthlyCount(PENGHUNI, "masuk"); // tren penghuni masuk per bulan
     const cashSpark = F ? F.monthlyCashIn : moveIn, labaSpark = F ? F.monthlyLaba : moveIn, opexSpark = F ? F.monthlyExp : moveIn;
     const cards = [
-      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"25,6 Jt", badge:"11%", dir:"up", good:true, spark:cashSpark, bg:G.ownCyan, onDark:true },
-      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"15,5 Jt", badge:"11%", dir:"up", good:true, spark:labaSpark, bg:G.ownCyan, onDark:true },
-      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11%", dir:"up", good:true, spark:moveIn, bg:G.ownDark, onDark:true },
-      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11%", dir:"up", good:false, spark:opexSpark, bg:G.ownNeutral, onDark:true },
-      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.ownNeutral, onDark:true },
-      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"1%", dir:"up", good:true, spark:moveIn, bg:G.ownDark, onDark:true },
+      { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"25,6 Jt", badge:"11%", dir:"up", good:true, spark:cashSpark, bg:G.ownPrimary, onDark:true },
+      { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"15,5 Jt", badge:"11%", dir:"up", good:true, spark:labaSpark, bg:G.ownPrimary, onDark:true },
+      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11%", dir:"up", good:true, spark:moveIn, bg:G.ownRose, onDark:true },
+      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11%", dir:"up", good:false, spark:opexSpark, bg:G.ownGray, onDark:true },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.ownGray, onDark:true },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"1%", dir:"up", good:true, spark:moveIn, bg:G.ownRose, onDark:true },
     ];
     const opex = F ? topEntries(F.opexBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
     const income = F ? topEntries(F.incomeBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
