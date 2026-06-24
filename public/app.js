@@ -454,6 +454,13 @@
     if (m) { const mon = MONTHS_ID[m[2].toLowerCase()]; if (mon != null) return new Date(+m[3], mon, +m[1]); }
     return null;
   }
+  // seperti parseDate, tapi menangkap jam:menit bila ada (untuk hitung Response Time satuan jam)
+  function parseDateTime(str) {
+    const base = parseDate(str); if (!base) return null;
+    const tm = String(str).match(/(\d{1,2}):(\d{2})/);
+    if (tm) base.setHours(+tm[1], +tm[2], 0, 0);
+    return base;
+  }
   const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const endOfDay   = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
   function periodRange() {
@@ -700,9 +707,16 @@
       { label:"Total Tiket", value:String(totalTiket), spark:tikSpark, bg:G.opAmber },
       { label:"Biaya Perbaikan", value:fmtRpShort(cost), spark:tikSpark, bg:G.opGreen },
     ];
+    // Response Time (jam) = Tgl Lapor − Tgl Kerusakan; Resolution Time (hari) = Tgl Selesai − Tgl Kerusakan.
+    // Dihitung sendiri per tiket di hidrasi (_respJam/_resolHari); di sini rata-rata pada periode.
+    const respArr = tP.map(x=>x._respJam).filter(v=>v!=null);
+    const resolArr = tP.map(x=>x._resolHari).filter(v=>v!=null);
+    const avg = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : null;
+    const fmtDur = n => (Math.round(n*10)/10).toLocaleString("id-ID");
+    const avgResp = avg(respArr), avgResol = avg(resolArr);
     const mid = [
-      { label:"Response Time", value:"—", spark:[], bg:G.opOrange, onDark:true },
-      { label:"Resolution Time", value:"—", spark:[], bg:G.opRed, onDark:true },
+      { label:"Response Time", value: avgResp!=null ? fmtDur(avgResp)+" jam" : "—", spark: respArr, bg:G.opOrange, onDark:true },
+      { label:"Resolution Time", value: avgResol!=null ? fmtDur(avgResol)+" hari" : "—", spark: resolArr, bg:G.opRed, onDark:true },
     ];
     const nInspeksi = filterByPeriod(LOGBOOK, "tanggal").filter(r=>r.divisi==="Inspeksi").length;
     const tiketDonut = [{t:"Preventif",value:nPrev,c:PAL.operasional[0]},{t:"Korektif",value:nKor,c:PAL.operasional[1]},{t:"Inspeksi",value:nInspeksi,c:PAL.operasional[2]}];
@@ -1406,12 +1420,26 @@
         const B = o.filter(x => x.nama);
         if (B.length) BOOKING = B;
       }
-      // Tiket = Preventive + Corrective maintenance (Operasional)
-      const tiketMap = { lokasi:["lokasi/item","lokasi"], desk:["deskripsi"], prioritas:["prioritas"], biaya:["biaya"], status:["status"], tgl:["tgl lapor/jadwal","tgl lapor","tanggal"] };
+      // Tiket = Preventive + Corrective maintenance (Operasional) — struktur baru:
+      //   Korektif punya kolom "Tanggal kerusakan"; Preventif tidak.
+      //   Response Time = Tgl Lapor − Tgl Kerusakan (jam); Resolution Time = Tgl Selesai − Tgl Kerusakan (hari).
+      const tiketMap = {
+        lokasi:["lokasi / item rusak","item rusak","lokasi"], desk:["deskripsi kerusakan","deskripsi","kategori"],
+        prioritas:["prioritas"], biaya:["biaya"], status:["status"],
+        tgl:["tanggal lapor","tgl lapor","tanggal"], idTiket:["id tiket"], durasiHari:["durasi perbaikan"],
+        tglKerusakan:["tanggal kerusakan","tgl kerusakan"], tglLapor:["tanggal lapor","tgl lapor"], tglSelesai:["tanggal selesai","tgl selesai"],
+      };
       const tpill = s => { const t = s.toLowerCase(); if (t.includes("selesai") || t.includes("complete")) return { t:"Complete", c:"s-complete" }; if (t.includes("proses") || t.includes("progress")) return { t:"In Progress", c:"s-progress" }; return { t: s || "Pending", c:"s-pending" }; };
-      const mapTiket = (rows, jenis) => objs(rows, tiketMap).filter(x => x.lokasi || x.desk).map((x, i) => ({ check:false, id:"TK-"+jenis[0]+pad3(i+1), pekerjaan:x.desk || x.lokasi, jenis, lokasi:x.lokasi, tanggal:x.tgl, status: tpill(x.status), _biaya: num(x.biaya) }));
-      const prevTab = findTab(h => has(h, "lokasi/item") && has(h, "biaya") && !has(h, "sumber"));
-      const corrTab = findTab(h => has(h, "lokasi/item") && has(h, "sumber"));
+      const mapTiket = (rows, jenis) => objs(rows, tiketMap).filter(x => x.lokasi || x.desk).map((x, i) => {
+        const tK = parseDateTime(x.tglKerusakan), tL = parseDateTime(x.tglLapor || x.tgl), tS = parseDateTime(x.tglSelesai);
+        const _respJam = (tK && tL && tL >= tK) ? (tL - tK) / 3600000 : null;          // hitung sendiri (jam)
+        const _resolHari = (tK && tS && tS >= tK) ? (tS - tK) / 86400000 : null;        // hitung sendiri (hari)
+        return { check:false, id: x.idTiket || ("TK-"+jenis[0]+pad3(i+1)), pekerjaan:x.desk || x.lokasi, jenis, lokasi:x.lokasi,
+          tanggal:x.tglLapor || x.tgl, status: tpill(x.status), _biaya: num(x.biaya), _respJam, _resolHari };
+      });
+      // Deteksi tab via kolom baru: keduanya punya "item rusak"; pembeda = ada "tanggal kerusakan" (Korektif)
+      const corrTab = findTab(h => has(h, "item rusak") && has(h, "tanggal kerusakan"));
+      const prevTab = findTab(h => has(h, "item rusak") && !has(h, "tanggal kerusakan"));
       let tk = [];
       if (prevTab) tk = tk.concat(mapTiket(prevTab, "Preventif"));
       if (corrTab) tk = tk.concat(mapTiket(corrTab, "Korektif"));
