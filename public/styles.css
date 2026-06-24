@@ -39,6 +39,14 @@
   --teal:          #4ed7c7;
   --violet:        #b18cf0;
 
+  /* Brand accent — glassmorphism design-system mint (dark mode) */
+  --brand:         #8AFFC4;
+  --brand-strong:  #6BEFAB;
+  --brand-ink:     #06281b;        /* text on mint button */
+  --focus-ring:    rgba(138,255,196,.55);
+  /* Owner brand — Kost Tiga Dara logo crimson */
+  --owner-brand:   #C92D31;
+
   /* Radii — iOS continuous-corner feel (larger, softer) */
   --r-app:   34px;
   --r-card:  22px;
@@ -734,6 +742,8 @@ body.theme-light {
   --rail:    rgba(15,18,25,.12);
   --border:rgba(15,18,25,.10); --border-2:rgba(15,18,25,.16);
   --text:#1b1d22; --text-2:#4a5160; --text-3:#7a8090;
+  /* design-system mint, darker for contrast on light surfaces */
+  --brand:#0EA66D; --brand-strong:#087A4E; --brand-ink:#ffffff; --focus-ring:rgba(14,166,109,.5);
   --specular: inset 0 1px 0 rgba(255,255,255,.7), inset 0 0 0 1px rgba(255,255,255,.25);
   /* bright liquid mesh */
   background:
@@ -807,3 +817,36 @@ body.theme-light .cell-select { background-color: rgba(0,0,0,.03); }
   }
   .card:hover, .room:hover, .stat-card:hover { transform: none; }
 }
+
+/* ===================== BRAND ALIGNMENT (glassmorphism design-system) =====================
+   Aksen mint design-system pada elemen interaktif inti + warna brand Owner crimson.
+   Ditaruh di akhir agar menang cascade tanpa mengubah aturan lain. */
+
+/* Tombol utama login = brand (mint); kontras teks dijaga per mode */
+.login-btn {
+  background: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: 1px solid transparent;
+  transition: filter .18s cubic-bezier(.2,.7,.2,1), box-shadow .18s;
+}
+/* light: mint lebih gelap agar teks putih lolos kontras */
+body.theme-light .login-btn { background: var(--brand-strong) !important; color: #fff !important; }
+.login-btn:hover { filter: brightness(1.05); box-shadow: 0 6px 22px var(--focus-ring); }
+
+/* Focus visible ring di seluruh kontrol — aksesibilitas + on-brand */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.login-input:focus, .col-filter:focus, .search input:focus {
+  outline: none;
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Owner: aksen brand crimson saat role owner aktif (badge & gembok) */
+body[data-role="owner"] .topbar__icon#securityBtn { color: var(--owner-brand); }
+
+/* Glass tile micro-refinement: tepi specular halus (design-system glass-edge) */
+.card, .stat-card, .login-card, .sec-modal { position: relative; }
