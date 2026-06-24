@@ -44,8 +44,12 @@
   --brand-strong:  #6BEFAB;
   --brand-ink:     #06281b;        /* text on mint button */
   --focus-ring:    rgba(138,255,196,.55);
-  /* Owner brand — Kost Tiga Dara logo crimson */
-  --owner-brand:   #C92D31;
+  /* Owner brand — Kost Tiga Dara palette (dari Brand Identity Guideline) */
+  --owner-brand:     #C92D31;   /* crimson — logo utama */
+  --owner-secondary: #CF7B72;   /* dusty rose */
+  --owner-dark:      #3A3635;   /* charcoal */
+  --owner-blush:     #F2D5CF;   /* blush pink */
+  --owner-neutral:   #8E8B87;   /* warm gray */
 
   /* Radii — iOS continuous-corner feel (larger, softer) */
   --r-app:   34px;

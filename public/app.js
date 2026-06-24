@@ -536,7 +536,9 @@
     mkUnit:"linear-gradient(150deg,#ecd07a,#c79a2a)", mkCac:"linear-gradient(150deg,#d8c4ee,#a98fd0)",
     opRed:"linear-gradient(150deg,#e8806f,#c0473a)", opOrange:"linear-gradient(150deg,#ec8a5f,#c75f2a)", opTeal:"linear-gradient(150deg,#7fd6c7,#2f8f9a)",
     opAmber:"linear-gradient(150deg,#ecc27a,#c7872a)", opGreen:"linear-gradient(150deg,#9ad68a,#4a8a3a)", opYellow:"linear-gradient(150deg,#ecd87a,#c7a02a)", opTeal2:"linear-gradient(150deg,#7fd6b7,#2f9a7a)",
-    ownCyan:"linear-gradient(150deg,#e8736f,#C92D31)", // warna brand Owner (logo Kost Tiga Dara #C92D31)
+    ownCyan:"linear-gradient(150deg,#CF7B72,#C92D31)",    // dusty rose → crimson (brand utama Owner)
+    ownDark:"linear-gradient(150deg,#C92D31,#3A3635)",    // crimson → charcoal (premium)
+    ownNeutral:"linear-gradient(150deg,#8E8B87,#3A3635)", // gray → charcoal (OPEX/Kosong)
     salePink:"linear-gradient(150deg,#f3cdd0,#e89aa0)", saleRed:"linear-gradient(150deg,#f0a0a8,#d0506a)", saleGold:"linear-gradient(150deg,#ecc99a,#c79a5a)", salePeach:"linear-gradient(150deg,#f0b89a,#d07a5a)",
   };
   const barStopsGreen = '<stop offset="0%" stop-color="#8ce0a0"/><stop offset="100%" stop-color="#2f8f7a"/>';
@@ -548,7 +550,7 @@
     admin:["#6ad17f","#4ed7c7","#c7d86a"],
     marketing:["#e26d6d","#c0397a","#ecd07a","#a98fd0"],
     operasional:["#c0473a","#ec8a5f","#2f8f9a"],
-    owner:["#C92D31","#e07a72","#9e1f28","#f0a89f"], // palet brand Owner (crimson #C92D31)
+    owner:["#C92D31","#CF7B72","#3A3635","#F2D5CF"], // palet brand Owner: crimson, dusty rose, charcoal, blush
     sales:["#e89aa0","#d0506a","#c79a5a"],
   };
 
@@ -659,10 +661,10 @@
     const cards = [
       { label:"Pendapatan Kotor", value:F?fmtRpShort(F.pendapatanKotor):"25,6 Jt", badge:"11%", dir:"up", good:true, spark:cashSpark, bg:G.ownCyan, onDark:true },
       { label:"Laba Bersih", value:F?fmtRpShort(F.labaBersih):"15,5 Jt", badge:"11%", dir:"up", good:true, spark:labaSpark, bg:G.ownCyan, onDark:true },
-      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11%", dir:"up", good:true, spark:moveIn, bg:G.ownCyan, onDark:true },
-      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11%", dir:"up", good:false, spark:opexSpark, bg:G.ownCyan, onDark:true },
-      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.ownCyan, onDark:true },
-      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"1%", dir:"up", good:true, spark:moveIn, bg:G.ownCyan, onDark:true },
+      { label:"Okupansi", value:(STATS.okupansi ?? 0)+" %", badge:"11%", dir:"up", good:true, spark:moveIn, bg:G.ownDark, onDark:true },
+      { label:"OPEX", value:F?fmtRpShort(F.beban):"10,3 Jt", badge:"11%", dir:"up", good:false, spark:opexSpark, bg:G.ownNeutral, onDark:true },
+      { label:"Kamar Kosong", value:String(STATS.kosong ?? 0), badge:"1%", dir:"down", good:true, spark:moveIn, bg:G.ownNeutral, onDark:true },
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), badge:"1%", dir:"up", good:true, spark:moveIn, bg:G.ownDark, onDark:true },
     ];
     const opex = F ? topEntries(F.opexBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Listrik",value:35,c:PAL.owner[0]},{t:"Gaji",value:30,c:PAL.owner[1]},{t:"Perawatan",value:20,c:PAL.owner[2]},{t:"Marketing",value:15,c:PAL.owner[3]}];
     const income = F ? topEntries(F.incomeBy,4).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [{t:"Sewa",value:80,c:PAL.owner[0]},{t:"Denda",value:8,c:PAL.owner[1]},{t:"Listrik",value:12,c:PAL.owner[2]}];
