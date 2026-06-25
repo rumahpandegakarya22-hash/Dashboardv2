@@ -377,17 +377,20 @@
     owner:"https://drive.google.com/drive/my-drive", admin:"https://drive.google.com/drive/my-drive",
     marketing:"https://drive.google.com/drive/my-drive", operasional:"https://drive.google.com/drive/my-drive", sales:"https://drive.google.com/drive/my-drive",
   };
+  const DIVISI_LABEL = { owner:"Owner", admin:"Admin & Keuangan", keuangan:"Keuangan", marketing:"Marketing", operasional:"Operasional", sales:"Sales" };
+  const divLabel = (r) => DIVISI_LABEL[String(r || "").toLowerCase()] || (r ? String(r) : "—");
   function dokumenRows(role, n) {
     const rl = String(role).toLowerCase();
-    // Data live dari 14_DOKUMEN: owner lihat semua, role lain hanya miliknya
+    // Data live dari 14_DOKUMEN: owner lihat semua (+ kolom Divisi), role lain hanya miliknya
     if (DOKUMEN && DOKUMEN.length) {
       const list = rl === "owner" ? DOKUMEN : DOKUMEN.filter(d => (d.role || "").toLowerCase() === rl);
-      return list.map(d => ({ id: d.id, nama: d.name, link: d.link }));
+      return list.map(d => ({ id: d.id, nama: d.name, link: d.link, divisi: divLabel(d.role) }));
     }
     const names = ["Kontrak Sewa","Bukti Pembayaran","Surat Perjanjian","SOP Divisi","Laporan Bulanan","Berita Acara"];
+    const divs = ["Admin & Keuangan","Marketing","Sales","Operasional","Admin & Keuangan","Marketing"];
     return Array.from({ length: n }, (_, i) => ({
       id:"#CM98"+String(i+1).padStart(2,"0"), nama: names[i % names.length],
-      link: DRIVE_FOLDER[rl] || "https://drive.google.com/drive/my-drive",
+      link: DRIVE_FOLDER[rl] || "https://drive.google.com/drive/my-drive", divisi: divs[i % divs.length],
     }));
   }
   // Tiket Operasional
@@ -492,11 +495,16 @@
   recomputeFromPenghuni();
 
   const DATE_KEYS = new Set(["tanggal","masuk","tempo","deadline","kategori"]);
+  const FUNNEL_ICO = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.6 3h12.8L9.2 9.1v3.4l-2.4 1.2V9.1z" fill="currentColor"/></svg>';
+  const NO_FILTER_COLS = new Set(["check", "aksi", "open", "tagihan"]);
   function table(cfg) {
     const { title, cols, paginate, titleRight } = cfg;
     const dateKey = cfg.dateKey || (cols.some(c => c.key === "tanggal") ? "tanggal" : null);
     const data = filterByPeriod(cfg.data, dateKey);
-    const heads = cols.map((c, i) => `<th data-col="${i}" class="th-sort">${c.label}<span class="sort-ind" aria-hidden="true"></span></th>`).join("");
+    const heads = cols.map((c, i) => {
+      const funnel = NO_FILTER_COLS.has(c.key) ? "" : `<button type="button" class="col-filter-btn" data-fcol="${i}" aria-label="Filter ${esc(c.label || "kolom")}" title="Filter kolom">${FUNNEL_ICO}</button>`;
+      return `<th data-col="${i}" class="th-sort">${esc(c.label || "")}<span class="sort-ind" aria-hidden="true"></span>${funnel}</th>`;
+    }).join("");
     const body = data.map(r => {
       const tds = cols.map(col => {
         const k = col.key, v = r[k];
@@ -543,6 +551,7 @@
       {key:"namaTx",label:"Nama Transaksi"},{key:"jumlah",label:"Jumlah"},{key:"keterangan",label:"Keterangan"},
     ],
     dokumen: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"open",label:"Link"}],
+    dokumenOwner: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"divisi",label:"Divisi"},{key:"open",label:"Link"}],
     logbook: [{key:"tanggal",label:"Tanggal"},{key:"name",label:"Task"},{key:"pic",label:"PIC"},{key:"divisi",label:"Divisi"},{key:"deadline",label:"Deadline"},{key:"logStatus",label:"Status"}],
     jatuhTempo: [{key:"name",label:"Nama"},{key:"wa",label:"Nomor WA"},{key:"tempo",label:"Tanggal"},{key:"tagihan",label:"Tagihan"}],
     vendor: [{key:"name",label:"Nama Vendor"},{key:"kategori",label:"Kategori"},{key:"kontak",label:"Nomor Telepon"},{key:"hasil",label:"Hasil"}],
@@ -566,7 +575,7 @@
   const pagePenghuni   = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuni, data:dataPenghuni(), paginate:true });
   const pagePenghuniSales = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuniSales, data:PENGHUNI });
   const pagePembayaran = () => table({ title:"DATA PEMBAYARAN", cols:COLS.pembayaran, data:PEMBAYARAN });
-  const pageDokumen    = (role) => table({ title:"DOKUMEN " + role.toUpperCase(), cols:COLS.dokumen, data:dokumenRows(role, 6) });
+  const pageDokumen    = (role) => table({ title:"DOKUMEN " + role.toUpperCase(), cols:(String(role).toLowerCase() === "owner" ? COLS.dokumenOwner : COLS.dokumen), data:dokumenRows(role, 6) });
   const stackTables    = (...blocks) => `<div class="view">${blocks.join("")}</div>`;
 
   // Logbook Operasional page (3 tabel)
@@ -1211,25 +1220,76 @@
     paint();
   }
 
-  /* table interaction: filter & sort PER KOLOM + search global + add */
+  /* table interaction: search global + dropdown filter per-kolom (corong) + sort + add */
   function wireTable(block) {
     const tbody = block.querySelector("tbody"); if (!tbody) return;
     const dataRows = () => [...tbody.querySelectorAll("tr")].filter(tr => !tr.classList.contains("tbl-empty"));
     const heads = [...block.querySelectorAll("thead tr:first-child th")];
-    const cellText = (tr, i) => (tr.cells[i]?.textContent || "").trim();
+    const cellText = (tr, i) => {
+      const cell = tr.cells[i]; if (!cell) return "";
+      const nameEl = cell.querySelector(".cell-name"); // abaikan inisial avatar pada kolom Nama
+      if (nameEl) { const av = nameEl.querySelector(".avatar"); return nameEl.textContent.replace(av ? av.textContent : "", "").trim(); }
+      return (cell.textContent || "").trim();
+    };
+    const active = new Map(); // colIndex -> Set(nilai terpilih, lowercase). Tak ada entri = tampilkan semua.
 
-    // Satu search bar mewakili SEMUA kolom (tanpa filter per-kolom)
+    // Search global + filter kolom aktif digabung (AND)
     const search = block.querySelector('[data-act="tsearch"]');
     const applyFilters = () => {
       const gq = (search?.value || "").toLowerCase();
-      dataRows().forEach(tr => { tr.style.display = (!gq || tr.textContent.toLowerCase().includes(gq)) ? "" : "none"; });
+      dataRows().forEach(tr => {
+        let ok = !gq || tr.textContent.toLowerCase().includes(gq);
+        if (ok) for (const [i, set] of active) { if (!set.has(cellText(tr, i).toLowerCase())) { ok = false; break; } }
+        tr.style.display = ok ? "" : "none";
+      });
     };
     search?.addEventListener("input", applyFilters);
 
-    // sort per kolom: klik header → toggle asc/desc, indikator ▲/▼
+    // ---- dropdown filter per kolom (corong, AutoFilter) ----
+    let menu = null;
+    const onDocClick = (e) => { if (menu && !menu.contains(e.target) && !e.target.closest(".col-filter-btn")) closeMenu(); };
+    const onKey = (e) => { if (e.key === "Escape") closeMenu(); };
+    function closeMenu() { if (!menu) return; menu.remove(); menu = null; document.removeEventListener("mousedown", onDocClick, true); document.removeEventListener("keydown", onKey); }
+    function openMenu(btn, i) {
+      closeMenu();
+      const values = [...new Set(dataRows().map(tr => cellText(tr, i)).filter(v => v !== ""))].sort((a, b) => a.localeCompare(b, "id", { numeric: true }));
+      const sel = active.get(i);
+      const isChecked = (v) => !sel || sel.has(v.toLowerCase());
+      menu = document.createElement("div");
+      menu.className = "colfilter-menu";
+      menu.innerHTML =
+        `<input type="text" class="cfm-q" placeholder="Cari nilai…">` +
+        `<label class="cfm-item cfm-all"><input type="checkbox" class="cfm-allbox"><span>Pilih semua</span></label>` +
+        `<div class="cfm-list">${values.length ? values.map(v => `<label class="cfm-item"><input type="checkbox" class="cfm-box" value="${esc(v)}" ${isChecked(v) ? "checked" : ""}><span>${esc(v)}</span></label>`).join("") : `<div class="cfm-empty">Tidak ada nilai</div>`}</div>` +
+        `<div class="cfm-foot"><button type="button" class="cfm-reset">Reset</button><button type="button" class="cfm-apply">Terapkan</button></div>`;
+      document.body.appendChild(menu);
+      const r = btn.getBoundingClientRect();
+      menu.style.top = Math.round(r.bottom + 6) + "px";
+      menu.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 236))) + "px";
+      const boxes = () => [...menu.querySelectorAll(".cfm-box")];
+      const visBoxes = () => boxes().filter(b => b.closest(".cfm-item").style.display !== "none");
+      const allbox = menu.querySelector(".cfm-allbox");
+      const syncAll = () => { const bs = visBoxes(); allbox.checked = bs.length > 0 && bs.every(b => b.checked); allbox.indeterminate = bs.some(b => b.checked) && !allbox.checked; };
+      syncAll();
+      allbox.addEventListener("change", () => { visBoxes().forEach(b => b.checked = allbox.checked); });
+      boxes().forEach(b => b.addEventListener("change", syncAll));
+      menu.querySelector(".cfm-q").addEventListener("input", (e) => { const q = e.target.value.toLowerCase(); boxes().forEach(b => b.closest(".cfm-item").style.display = b.value.toLowerCase().includes(q) ? "" : "none"); syncAll(); });
+      menu.querySelector(".cfm-apply").addEventListener("click", () => {
+        const checked = boxes().filter(b => b.checked).map(b => b.value.toLowerCase());
+        if (checked.length === values.length) active.delete(i); else active.set(i, new Set(checked));
+        btn.classList.toggle("is-active", active.has(i));
+        applyFilters(); closeMenu();
+      });
+      menu.querySelector(".cfm-reset").addEventListener("click", () => { active.delete(i); btn.classList.remove("is-active"); applyFilters(); closeMenu(); });
+      setTimeout(() => { document.addEventListener("mousedown", onDocClick, true); document.addEventListener("keydown", onKey); menu.querySelector(".cfm-q").focus(); }, 0);
+    }
+    block.querySelectorAll(".col-filter-btn").forEach(btn => btn.addEventListener("click", (e) => { e.stopPropagation(); openMenu(btn, +btn.dataset.fcol); }));
+
+    // sort per kolom: klik header (abaikan klik corong) → toggle asc/desc, indikator ▲/▼
     heads.forEach((th, i) => {
       th.style.cursor = "pointer"; th.title = "Klik untuk urutkan";
-      th.addEventListener("click", () => {
+      th.addEventListener("click", (e) => {
+        if (e.target.closest(".col-filter-btn")) return;
         const dir = th.dataset.dir === "asc" ? "desc" : "asc";
         heads.forEach(h => { h.removeAttribute("data-dir"); const ind = h.querySelector(".sort-ind"); if (ind) ind.textContent = ""; });
         th.dataset.dir = dir;

@@ -914,3 +914,46 @@ body.theme-light {
   content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 1px;
   background: var(--glass-edge); pointer-events: none; z-index: 1;
 }
+
+/* ===================== FILTER PER KOLOM (dropdown corong) ===================== */
+.th-sort { white-space: nowrap; }
+.col-filter-btn {
+  margin-left: 5px; padding: 1px; vertical-align: middle; line-height: 0;
+  background: transparent; border: 0; cursor: pointer; color: var(--text-3); opacity: .55;
+  display: inline-flex; align-items: center; transition: opacity .15s, color .15s;
+}
+.col-filter-btn:hover { opacity: 1; color: var(--text); }
+.col-filter-btn.is-active { opacity: 1; color: var(--brand); }
+.col-filter-btn svg { width: 12px; height: 12px; display: block; }
+
+.colfilter-menu {
+  position: fixed; z-index: 300; width: 224px; max-height: 340px;
+  display: flex; flex-direction: column; padding: 8px;
+  background: var(--card-2); border: 1px solid var(--border-2); border-radius: 12px;
+  box-shadow: 0 20px 54px rgba(0,0,0,.42);
+  -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
+  color: var(--text); font-size: 12.5px;
+}
+body.theme-light .colfilter-menu { background: rgba(255,255,255,.94); }
+.cfm-q {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 9px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: inherit;
+}
+.cfm-q:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--focus-ring); }
+.cfm-list { overflow-y: auto; margin: 6px 0; max-height: 210px; }
+.cfm-item {
+  display: flex; align-items: center; gap: 8px; padding: 4px 5px;
+  border-radius: 6px; cursor: pointer;
+}
+.cfm-item:hover { background: var(--card); }
+.cfm-item input { accent-color: var(--brand); flex: 0 0 auto; }
+.cfm-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfm-all { font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 7px; margin-bottom: 2px; }
+.cfm-empty { font-size: 12px; color: var(--text-3); padding: 10px; text-align: center; }
+.cfm-foot { display: flex; gap: 8px; justify-content: flex-end; padding-top: 7px; border-top: 1px solid var(--border); }
+.cfm-foot button {
+  font: inherit; font-size: 12px; font-weight: 600; padding: 5px 13px; border-radius: 8px;
+  cursor: pointer; border: 1px solid var(--border-2); background: var(--card); color: var(--text);
+}
+.cfm-apply { background: var(--brand) !important; color: var(--brand-ink) !important; border-color: transparent !important; }
+body.theme-light .cfm-apply { background: var(--brand-strong) !important; color: #fff !important; }
