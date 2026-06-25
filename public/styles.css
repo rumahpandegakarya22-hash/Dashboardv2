@@ -875,3 +875,42 @@ body[data-role="owner"] .topbar__icon#securityBtn { color: var(--owner-brand); }
   font-size: 13px; font-style: italic;
   border: 1px dashed var(--border); border-radius: 14px; background: rgba(125,125,125,.04);
 }
+
+/* ============================================================================
+   GLASSMORPHISM — latar SEMUA chart & tabel + scorecard Data Kamar (.room).
+   Aturan: hanya chart, tabel, dan scorecard Data Kamar yang transparan-glass.
+   Scorecard overview (.stat-card) TETAP gradient berwarna (tidak diubah).
+   Berlaku di dark MAUPUN light mode (token di-resolve per tema).
+   Ditaruh paling akhir agar menang cascade. ============================== */
+:root {
+  --glass-card:     rgba(255,255,255,.085);  /* frosted tile (dark) */
+  --glass-card-brd: rgba(255,255,255,.14);
+  --glass-edge:     linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+}
+body.theme-light {
+  --glass-card:     rgba(255,255,255,.48);   /* frosted tile (light) */
+  --glass-card-brd: rgba(15,18,25,.08);
+  --glass-edge:     linear-gradient(90deg, transparent, rgba(255,255,255,.95), transparent);
+}
+/* chart / tabel / donut cards + Data Kamar rooms = kaca transparan */
+.card,
+.rooms .room {
+  background: var(--glass-card) !important;
+  border: 1px solid var(--glass-card-brd) !important;
+}
+.card {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+/* 30 kartu kamar: blur lebih ringan demi performa, tetap jelas transparan-glass */
+.rooms .room {
+  -webkit-backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
+}
+/* specular edge atas (kilau kaca design-system) */
+.card, .rooms .room { position: relative; }
+.card::before,
+.rooms .room::before {
+  content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 1px;
+  background: var(--glass-edge); pointer-events: none; z-index: 1;
+}
