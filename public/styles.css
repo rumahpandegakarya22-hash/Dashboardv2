@@ -915,6 +915,70 @@ body.theme-light {
   background: var(--glass-edge); pointer-events: none; z-index: 1;
 }
 
+/* ============================================================================
+   iOS 26 — LIQUID GLASS  (material pass, menang cascade)
+   Material kaca cair: frost lebih dalam + rim-light spekular + kedalaman
+   mengambang + interaksi pegas. Dark & light. Struktur tidak diubah. ========= */
+:root {
+  --glass-blur:      38px;   /* frost utama (panel, kartu, modal) */
+  --glass-blur-sm:   20px;   /* frost ringan (sidebar, 30 kartu kamar) */
+  --glass-saturate:  185%;   /* warna mesh "membias" lewat kaca */
+  /* rim kaca: highlight tepi atas + garis dalam + glow bawah lembut */
+  --lg-rim:    inset 0 1px 0 rgba(255,255,255,.34), inset 0 0 0 1px rgba(255,255,255,.06), inset 0 -12px 28px -16px rgba(255,255,255,.08);
+  /* bayangan mengambang berlapis (floating depth) */
+  --lg-shadow: 0 1px 1px rgba(0,0,0,.16), 0 16px 36px -12px rgba(0,0,0,.46), 0 44px 84px -36px rgba(0,0,0,.5);
+  --lg-spring: cubic-bezier(.22,.61,.36,1);
+}
+body.theme-light {
+  --lg-rim:    inset 0 1px 0 rgba(255,255,255,.95), inset 0 0 0 1px rgba(255,255,255,.55), inset 0 -12px 28px -16px rgba(255,255,255,.5);
+  --lg-shadow: 0 1px 1px rgba(40,60,110,.06), 0 16px 34px -14px rgba(40,60,110,.16), 0 40px 76px -34px rgba(40,60,110,.18);
+}
+
+/* mesh latar lebih hidup → refraksi kaca terlihat */
+body { background-size: 160% 160%, 150% 150%, 170% 170%, 150% 150%, 100% 100%; }
+
+/* Surface mengambang: panel utama + kartu + modal + menu = rim kaca + depth */
+.app,
+.card, .rooms .room, .stat-card,
+.sec-modal, .login-card,
+.colfilter-menu, .period-menu, .filter-menu, .chart-tip {
+  box-shadow: var(--lg-rim), var(--lg-shadow) !important;
+}
+
+/* Garis spekular tepi atas pada panel/topbar/sidebar (refleksi cahaya) */
+.app, .topbar, .sidebar { position: relative; }
+.app::after, .topbar::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: var(--glass-edge); pointer-events: none; z-index: 6;
+}
+
+/* Interaksi pegas: angkat halus saat hover (transform/opacity → hemat) */
+.card, .stat-card, .rooms .room {
+  transition: transform .26s var(--lg-spring), box-shadow .26s ease !important;
+  will-change: transform;
+}
+.card:hover, .rooms .room:hover, .stat-card:hover { transform: translateY(-3px); }
+.stat-card:hover { box-shadow: var(--lg-rim), 0 1px 1px rgba(0,0,0,.18), 0 22px 50px -14px rgba(0,0,0,.5) !important; }
+
+/* Tombol pil "liquid": kilau lembut + tekan responsif */
+.cell-btn, .login-btn, .chip, .period-toggle, .seg-pill, .cfm-foot button {
+  transition: transform .18s var(--lg-spring), box-shadow .18s ease, background-color .18s ease, color .18s ease, filter .18s ease;
+}
+.cell-btn:hover, .chip:hover, .period-toggle:hover { transform: translateY(-1px); }
+.cell-btn:active, .login-btn:active, .chip:active, .period-toggle:active { transform: translateY(0) scale(.97); }
+
+/* Topbar lebih "kaca" (sebelumnya nyaris transparan) */
+.topbar { background: rgba(255,255,255,.05); }
+body.theme-light .topbar { background: rgba(255,255,255,.5); }
+
+/* Hormati pengguna yang mengurangi gerak */
+@media (prefers-reduced-motion: reduce) {
+  .card, .stat-card, .rooms .room, .cell-btn, .login-btn, .chip, .period-toggle { transition: none !important; }
+  .card:hover, .stat-card:hover, .rooms .room:hover,
+  .cell-btn:hover, .chip:hover, .period-toggle:hover,
+  .cell-btn:active, .login-btn:active, .chip:active, .period-toggle:active { transform: none !important; }
+}
+
 /* ===================== FILTER PER KOLOM (dropdown corong) ===================== */
 .th-sort { white-space: nowrap; }
 .col-filter-btn {
