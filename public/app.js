@@ -1592,8 +1592,14 @@
         const hasKeluar = (v) => { const t = String(v || "").trim(); return t && t !== "-"; };
         const churnedRecs = recs.filter(x => hasKeluar(x.keluar));
         const total = recs.length, churned = churnedRecs.length;
-        // rata-rata lama tinggal (bln) dari yang sudah keluar
-        const tenures = churnedRecs.map(x => { const a = parseDate(x.masuk), b = parseDate(x.keluar); return (a && b) ? (b - a) / 2629800000 : null; }).filter(v => v != null && v >= 0);
+        // Rata-rata lama tinggal (bln) SEMUA pelanggan: yang sudah keluar = keluar−masuk;
+        // yang masih tinggal (belum ada Tgl Keluar) = tanggal sistem sekarang − masuk.
+        const MONTH_MS = 2629800000, now = new Date();
+        const tenures = recs.map(x => {
+          const a = parseDate(x.masuk); if (!a) return null;
+          const b = hasKeluar(x.keluar) ? parseDate(x.keluar) : now;
+          return b ? (b - a) / MONTH_MS : null;
+        }).filter(v => v != null && v >= 0);
         const avgTenure = tenures.length ? Math.round(tenures.reduce((s, v) => s + v, 0) / tenures.length) : null;
         if (total) RETENTION = { total, churned, rate: Math.round(((total - churned) / total) * 100), churn: Math.round((churned / total) * 100), avgTenure };
       }
