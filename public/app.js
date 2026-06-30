@@ -16,7 +16,17 @@
   const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
   const initials = (name) => (name || "?").split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase();
   const slug = (s) => String(s || "").toLowerCase().replace(/[()]/g, "").trim().replace(/\s+/g, "-");
-  const digits = (s) => String(s || "").replace(/[^0-9]/g, "").replace(/^0/, "62");
+  // normalisasi nomor HP Indonesia → format wa.me (62…): buang non-digit, 0→62, 8xx→62, +62/62 tetap
+  const digits = (s) => {
+    let d = String(s || "").replace(/[^0-9]/g, "");
+    if (!d) return "";
+    if (d.startsWith("62")) return d;
+    if (d.startsWith("0")) return "62" + d.slice(1);
+    if (d.startsWith("8")) return "62" + d;     // nomor tanpa 0 di depan (mis. 895329656137)
+    return d;
+  };
+  // tampilan No HP rapi: pakai 0 di depan (08xx), buang keterangan seperti "(kakak)"
+  const fmtHP = (s) => { const d = digits(s); return d ? (d.startsWith("62") ? "0" + d.slice(2) : d) : "—"; };
   // format angka dengan pemisah ribuan (id-ID) + satuan opsional → callout & axis
   const fmtNum = (n, unit) => { const x = Number(n); const s = isNaN(x) ? String(n) : x.toLocaleString("id-ID"); return unit ? s + " " + unit : s; };
   // tick sumbu Y dinamis: count label dari 0..max (dibulatkan), untuk grafik apa pun
@@ -264,6 +274,7 @@
   let TX_ROWS = null; // baris mentah TRANSAKSI (untuk hitung ulang keuangan per periode tanggal)
   let TIKET = null, BOOKING = null; // tiket (maintenance) & booking dari tab live
   let DOKUMEN = null; // dokumen dari tab 14_DOKUMEN (per role)
+  let KAMAR = null;   // master 30 kamar (tab KAMAR: No Kamar/Tipe/Harga/Status) → sumber okupansi akurat
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -278,26 +289,57 @@
   }
   function recomputeFromPenghuni() {
     OCC_BY_ROOM = Object.fromEntries(PENGHUNI.map(p => [p.kamar, p]));
-    // Data Kamar — HANYA kamar yang ada di data (tidak mengarang Kosong/Maintenance).
-    // Status murni dari data penghuni: Booking (DP) → "Booking", lainnya → "Terisi".
-    ROOMS = PENGHUNI.map(p => ({
-      no: String(p.kamar).padStart(2, "0"), _n: +p.kamar, jenis: p.jenis,
-      penghuni: p.nama, wa: p.kontak, harga: PRICE[p.jenis] || "",
-      status: /booking/i.test(p.status || "") ? "Booking" : "Terisi",
-    })).sort((a, b) => a._n - b._n);
-    // Metrik turunan (instruksi: hitung sendiri dari ketersediaan data)
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const DAY = 86400000;
+    // status kamar dinormalkan dari teks sheet KAMAR + data penghuni
+    const normRoomStatus = (raw, occ) => {
+      const s = String(raw || "").toLowerCase();
+      if (/maint|perbaik|rusak/.test(s)) return "Maintenance";
+      if (/booking|dp/.test(s)) return "Booking";
+      if (/kosong|available|tersedia|empty/.test(s)) return "Kosong";
+      if (/isi|terisi|huni|penuh|occupied|aktif|lunas|belum|tunggak|sewa/.test(s)) return "Terisi";
+      if (occ) return /booking/i.test(occ.status || "") ? "Booking" : "Terisi"; // fallback dari penghuni
+      return s ? "Terisi" : "Kosong";
+    };
+    const fmtRpHarga = (h) => { const n = +String(h).replace(/[^0-9]/g, ""); return n ? "Rp" + n.toLocaleString("id-ID") : ""; };
+    // ---- Data Kamar: pakai master KAMAR (akurat: Kosong/Maintenance), else turunkan dari PENGHUNI ----
+    if (KAMAR && KAMAR.length) {
+      ROOMS = KAMAR.map(k => {
+        const occ = OCC_BY_ROOM[k.kamar];
+        return {
+          no: String(k.kamar).padStart(2, "0"), _n: +k.kamar,
+          jenis: k.tipe || (occ ? occ.jenis : ROOM_TYPE(+k.kamar)),
+          penghuni: (occ ? occ.nama : "") || k.nama || "",
+          wa: occ ? occ.kontak : "", harga: fmtRpHarga(k.harga) || PRICE[k.tipe] || "",
+          status: normRoomStatus(k.status, occ),
+        };
+      }).sort((a, b) => a._n - b._n);
+    } else {
+      ROOMS = PENGHUNI.map(p => ({
+        no: String(p.kamar).padStart(2, "0"), _n: +p.kamar, jenis: p.jenis,
+        penghuni: p.nama, wa: p.kontak, harga: PRICE[p.jenis] || "",
+        status: /booking/i.test(p.status || "") ? "Booking" : "Terisi",
+      })).sort((a, b) => a._n - b._n);
+    }
+    // ---- Metrik turunan ----
     let aktif = 0, booking = 0, tunggakan = 0, jatuhTempo = 0;
     PENGHUNI.forEach(p => {
       if (/booking/i.test(p.status || "")) booking++; else aktif++;
-      const d = parseDate(p.tempo);
-      if (d) { const diff = Math.round((d - today) / DAY); if (diff < 0) tunggakan++; else if (diff <= 7) jatuhTempo++; }
+      // jatuh tempo: utamakan kolom Flag Tagih dari sheet (LEWAT/SEGERA/Aman), else hitung dari tanggal
+      const f = String(p.flag || "").toUpperCase();
+      if (f) { if (f.includes("LEWAT")) tunggakan++; else if (f.includes("SEGERA")) jatuhTempo++; }
+      else { const d = parseDate(p.tempo); if (d) { const diff = Math.round((d - today) / DAY); if (diff < 0) tunggakan++; else if (diff <= 7) jatuhTempo++; } }
     });
-    const kapasitas = PENGHUNI.length, occupied = PENGHUNI.length;
+    let kapasitas, occupied, kosong;
+    if (KAMAR && KAMAR.length) {
+      const cnt = (re) => ROOMS.filter(r => re.test(r.status)).length;
+      kapasitas = KAMAR.length; kosong = cnt(/kosong/i);
+      occupied = cnt(/terisi/i) + cnt(/booking/i);
+    } else {
+      kapasitas = PENGHUNI.length; occupied = PENGHUNI.length; kosong = 0;
+    }
     STATS = {
-      aktif, booking, tunggakan, jatuhTempo, kapasitas, occupied,
-      kosong: Math.max(0, kapasitas - occupied),
+      aktif, booking, tunggakan, jatuhTempo, kapasitas, occupied, kosong,
       okupansi: kapasitas ? Math.round((occupied / kapasitas) * 100) : 0,
     };
     // Data Pembayaran (fallback dari PENGHUNI bila TRANSAKSI belum live) —
@@ -521,6 +563,8 @@
           case "aksi":      return `<td>${waBtn(r.wa, "Chat")}</td>`;
           case "open":      return `<td>${openBtn(r.link)}</td>`;
           case "tagihan":   return `<td>${tagihanBtn(r.wa)}</td>`;
+          case "kontak":    return `<td>${esc(fmtHP(v))}</td>`;
+          case "wa":        return `<td>${esc(fmtHP(v))}</td>`;
           case "id":        return `<td class="cell-id">${esc(v ?? "")}</td>`;
           default:          return `<td>${esc(v ?? "")}</td>`;
         }
@@ -553,7 +597,7 @@
     dokumen: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"open",label:"Link"}],
     dokumenOwner: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"divisi",label:"Divisi"},{key:"open",label:"Link"}],
     logbook: [{key:"tanggal",label:"Tanggal"},{key:"name",label:"Task"},{key:"pic",label:"PIC"},{key:"divisi",label:"Divisi"},{key:"deadline",label:"Deadline"},{key:"logStatus",label:"Status"}],
-    jatuhTempo: [{key:"name",label:"Nama"},{key:"wa",label:"Nomor WA"},{key:"tempo",label:"Tanggal"},{key:"tagihan",label:"Tagihan"}],
+    jatuhTempo: [{key:"name",label:"Nama"},{key:"wa",label:"Nomor WA"},{key:"tempo",label:"Jatuh Tempo"},{key:"sisa",label:"Sisa Hari"},{key:"tagihan",label:"Tagihan"}],
     vendor: [{key:"name",label:"Nama Vendor"},{key:"kategori",label:"Kategori"},{key:"kontak",label:"Nomor Telepon"},{key:"hasil",label:"Hasil"}],
     vendorOps: [{key:"name",label:"Nama Vendor"},{key:"kategori",label:"Kategori"},{key:"kontak",label:"Nomor Telepon"},{key:"hasil",label:"Hasil"},{key:"aksi",label:"WhatsApp"}],
     leads:  [{key:"check",label:""},{key:"id",label:"ID"},{key:"name",label:"Nama"},{key:"wa",label:"Nomor WA"},{key:"asal",label:"Asal"},{key:"tanggal",label:"Tanggal"},{key:"status",label:"Status"}],
@@ -643,7 +687,20 @@
       { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), spark:tempoSpark, bg:G.adminDarkO, onDark:true },
       { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), spark:tempoSpark, bg:G.adminDarkG, onDark:true },
     ];
-    const jatuh = PENGHUNI.slice(0, 5).map(p => ({ nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo }));
+    // Daftar Jatuh Tempo: SELURUH penghuni yang sudah/segera jatuh tempo (Flag LEWAT/SEGERA atau Sisa Hari ≤ 7)
+    const today0 = startOfDay(new Date());
+    const overdue = PENGHUNI.filter(p => {
+      const f = String(p.flag || "").toUpperCase();
+      if (f) return f.includes("LEWAT") || f.includes("SEGERA");
+      if (p.sisa != null) return p.sisa <= 7;
+      const d = parseDate(p.tempo); if (!d) return false;
+      return Math.round((d - today0) / 86400000) <= 7;
+    }).sort((a, b) => (a.sisa ?? 9999) - (b.sisa ?? 9999));
+    const jatuh = overdue.map(p => {
+      const s = p.sisa;
+      const sisaTxt = (s == null) ? "—" : (s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi");
+      return { nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo, sisa:sisaTxt };
+    });
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
     // OPEX bar — data real; kosong → empty state
     const obars = F ? topEntries(F.opexBy,4) : [];
@@ -665,7 +722,7 @@
       </div>
       <div class="grid row-2-3 mt">
         ${lineCard}
-        ${table({ title:"DAFTAR JATUH TEMPO", titleRight:true, cols:COLS.jatuhTempo, data:jatuh, dateKey:"tempo" })}
+        ${table({ title:"DAFTAR JATUH TEMPO", titleRight:true, cols:COLS.jatuhTempo, data:jatuh, dateKey:null })}
       </div></div>`;
   }
 
@@ -1395,15 +1452,18 @@
         instansi: col("instansi"), durasi: col("lama tinggal","durasi"), masuk: col("tgl masuk","masuk"),
         tempo: col("jatuh tempo","tempo"), status: col("status"), kontak: col("kontak darurat","kontak"),
         kontakNama: col("nama kontak"), email: col("email"),
+        sisa: col("sisa hari","sisa"), flag: col("flag tagih","flag"),
       };
       const get = (r, i, d="") => (i >= 0 && r[i] != null ? r[i] : d);
       const data = rows.slice(1).filter(r => get(r, ci.nama)).map((r, i) => {
         const kamar = +(String(get(r, ci.kamar, "0")).replace(/[^0-9]/g, "") || 0);
+        const sisaRaw = String(get(r, ci.sisa)).replace(/[^0-9-]/g, "");
         return {
           no: ci.no >= 0 ? get(r, ci.no, i + 1) : i + 1, id: get(r, ci.id), nama: get(r, ci.nama), panggil: get(r, ci.panggil),
           kamar, jenis: get(r, ci.jenis) || ROOM_TYPE(kamar), asal: get(r, ci.asal), kerja: get(r, ci.kerja),
           instansi: get(r, ci.instansi), durasi: get(r, ci.durasi), masuk: get(r, ci.masuk), tempo: get(r, ci.tempo),
           status: get(r, ci.status), kontak: get(r, ci.kontak), kontakNama: get(r, ci.kontakNama), email: get(r, ci.email),
+          sisa: sisaRaw === "" ? null : +sisaRaw, flag: get(r, ci.flag),
         };
       });
       if (data.length) { PENGHUNI = data; recomputeFromPenghuni(); }
@@ -1511,6 +1571,15 @@
         const o = objs(vendorTab, { nama:["nama vendor"], kategori:["kategori"], kontak:["nomor telp","telp","kontak"], hasil:["hasil"] });
         const V = o.filter(x => x.nama).map((x, i) => ({ id:"VD-"+pad3(i+1), nama:x.nama, kategori:x.kategori, kontak:x.kontak, hasil:x.hasil || "-", wa:x.kontak }));
         if (V.length) VENDOR = V;
+      }
+      // Master KAMAR (tab KAMAR: ID | No Kamar | Nama | Tipe | Harga | Status) → okupansi akurat
+      const kamarTab = findTab(h => has(h, "no kamar") && has(h, "tipe") && has(h, "harga") && has(h, "status"));
+      if (kamarTab) {
+        const o = objs(kamarTab, { id:["id"], kamar:["no kamar"], nama:["nama"], tipe:["tipe"], harga:["harga"], status:["status"] });
+        const K = o.filter(x => String(x.kamar).replace(/[^0-9]/g, "")).map(x => ({
+          id:x.id, kamar:+String(x.kamar).replace(/[^0-9]/g, ""), nama:x.nama, tipe:x.tipe, harga:x.harga, status:x.status,
+        }));
+        if (K.length) { KAMAR = K; recomputeFromPenghuni(); } // hitung ulang ROOMS/STATS dgn master kamar
       }
       // Dokumen (14_DOKUMEN)
       const dokTab = findTab(h => has(h, "judul") && (has(h, "role") || has(h, "link drive")));
