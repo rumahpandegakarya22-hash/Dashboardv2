@@ -642,7 +642,7 @@
       <div class="room__type">${r.jenis}</div>
       <div class="room__occupant">Penghuni<br><b>${r.penghuni || "-"}</b></div>
       ${isOps
-        ? `<div class="room__foot room__foot--wa">${digits(r.wa) ? `<span class="room__hp">${esc(fmtHP(r.wa))}</span>${waBtn(r.wa, "Hubungi")}` : `<span class="muted">Tidak ada kontak</span>`}</div>`
+        ? `<div class="room__foot room__foot--wa">${digits(r.wa) ? waBtn(r.wa, "Hubungi") : `<span class="muted">Tidak ada kontak</span>`}</div>`
         : `<div class="room__foot"><span class="price">${r.harga}</span><span>/bln</span></div>`}
     </article>`).join("");
     const chips = `<div class="room-filter">${ROOM_FILTERS.map((f, i) => `<button class="chip ${i===0?"is-active":""}" data-roomfilter="${f}">${f}</button>`).join("")}</div>`;
