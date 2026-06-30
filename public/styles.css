@@ -957,6 +957,17 @@ body { background-size: 160% 160%, 150% 150%, 170% 170%, 150% 150%, 100% 100%; }
   backdrop-filter: blur(var(--glass-blur-nav)) saturate(var(--glass-saturate)) !important;
 }
 
+/* Teks PUTIH di semua komponen ber-blur 10px (chart, tabel, scorecard, Data Kamar,
+   login card). Hanya dark mode (di light mode putih tak terbaca). Caranya redefine
+   token teks pada lingkup komponen → label, nilai, sumbu chart (fill var(--text-3)),
+   legenda semua ikut putih. Pil status & badge berwarna pakai warna sendiri → tetap. */
+body:not(.theme-light) :is(.card, .stat-card, .rooms .room, .login-card) {
+  --text:   #ffffff;
+  --text-2: rgba(255,255,255,.92);
+  --text-3: rgba(255,255,255,.74);
+  color: #fff;
+}
+
 /* Garis spekular tepi atas pada panel/topbar/sidebar (refleksi cahaya) */
 .app, .topbar, .sidebar { position: relative; }
 .app::after, .topbar::after {
