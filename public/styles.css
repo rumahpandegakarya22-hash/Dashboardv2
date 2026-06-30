@@ -8,8 +8,8 @@
 :root {
   /* Surfaces — iOS 26 "Liquid Glass" translucent materials */
   --bg:            #0b0c11;                     /* deep base behind the colour mesh */
-  --panel:         rgba(28, 30, 41, 0.55);      /* the big frosted app container */
-  --sidebar:       rgba(44, 46, 60, 0.42);      /* sidebar glass */
+  --panel:         rgba(22, 24, 34, 0.34);      /* the big frosted app container — lebih tembus agar mesh terlihat */
+  --sidebar:       rgba(40, 42, 56, 0.30);      /* sidebar glass */
   --card:          rgba(255, 255, 255, 0.055);  /* inner glass tile */
   --card-2:        rgba(255, 255, 255, 0.09);   /* raised glass (row hover, inputs) */
   --rail:          rgba(255, 255, 255, 0.11);   /* chart gridlines / tracks */
@@ -739,8 +739,8 @@ table.tbl tbody tr.is-selected td { background: rgba(255,255,255,.05); }
 /* ============================ LIGHT THEME =============================== */
 body.theme-light {
   --bg:#dbe3f2;
-  --panel:   rgba(255,255,255,.58);
-  --sidebar: rgba(255,255,255,.46);
+  --panel:   rgba(255,255,255,.40);
+  --sidebar: rgba(255,255,255,.34);
   --card:    rgba(255,255,255,.62);
   --card-2:  rgba(255,255,255,.82);
   --rail:    rgba(15,18,25,.12);
