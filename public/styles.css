@@ -883,12 +883,12 @@ body[data-role="owner"] .topbar__icon#securityBtn { color: var(--owner-brand); }
    Berlaku di dark MAUPUN light mode (token di-resolve per tema).
    Ditaruh paling akhir agar menang cascade. ============================== */
 :root {
-  --glass-card:     rgba(255,255,255,.085);  /* frosted tile (dark) */
+  --glass-card:     rgba(255,255,255,.045);  /* frosted tile (dark) — sangat tembus, mesh terlihat */
   --glass-card-brd: rgba(255,255,255,.14);
   --glass-edge:     linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
 }
 body.theme-light {
-  --glass-card:     rgba(255,255,255,.48);   /* frosted tile (light) */
+  --glass-card:     rgba(255,255,255,.34);   /* frosted tile (light) */
   --glass-card-brd: rgba(15,18,25,.08);
   --glass-edge:     linear-gradient(90deg, transparent, rgba(255,255,255,.95), transparent);
 }
@@ -943,6 +943,12 @@ body { background-size: 160% 160%, 150% 150%, 170% 170%, 150% 150%, 100% 100%; }
 .sec-modal, .login-card,
 .colfilter-menu, .period-menu, .filter-menu, .chart-tip {
   box-shadow: var(--lg-rim), var(--lg-shadow) !important;
+}
+/* Scorecard: gradien warna kini semi-transparan (alpha 0.58 via glassify) →
+   beri frost agar mesh di belakang membias seperti kaca, warna tetap dipertahankan. */
+.stat-card {
+  -webkit-backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
 }
 
 /* Garis spekular tepi atas pada panel/topbar/sidebar (refleksi cahaya) */

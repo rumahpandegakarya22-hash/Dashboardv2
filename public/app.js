@@ -447,6 +447,11 @@
   }
 
   /* --------------------------------------------------------- components */
+  // Liquid glass scorecard: PERTAHANKAN warna gradien, hanya turunkan alpha → mesh tembus.
+  const glassify = (grad, a) => String(grad).replace(/#([0-9a-fA-F]{6})/g, (m, h) => {
+    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  });
   function statCard(c) {
     const dark = c.onDark ? " on-dark" : "";
     // Tren dihitung dari DERET data (sparkline). Bila tak ada deret, pakai badge manual bila ada.
@@ -462,7 +467,7 @@
     }
     // garis dalam scorecard = sparkline DATA asli (bukan ornamen)
     const spark = sparkline(c.spark, c.onDark ? "rgba(255,255,255,.7)" : "rgba(20,40,60,.45)");
-    return `<article class="stat-card${dark}" style="background:${c.bg};position:relative">
+    return `<article class="stat-card${dark}" style="background:${glassify(c.bg, 0.58)};position:relative">
       <span class="stat-card__label">${esc(c.label)}</span><span class="stat-card__value">${esc(c.value)}</span>
       ${badge}
       <span class="stat-card__wave">${spark}</span></article>`;
