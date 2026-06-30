@@ -841,29 +841,31 @@
   }
 
   function salesOverview() {
-    const bookingP = filterByPeriod(BOOKING || [], "tanggal"), leadsP = filterByPeriod(LEADS, "tanggal"), surveyP = filterByPeriod(SURVEY, "tanggal");
-    const nLeads = leadsP.length, nSurvey = surveyP.length, nBooking = bookingP.length;
-    const nCancel = bookingP.filter(x=>/batal|cancel/i.test(x.status || "")).length;
+    // Scorecard Sales = metrik current/agregat → TANPA filter periode (data booking/leads bisa lintas tahun).
+    // Hanya grafik tren (time-series) yang ikut periode.
+    const allBooking = BOOKING || [];
+    const nLeads = LEADS.length, nSurvey = SURVEY.length, nBooking = allBooking.length;
+    const nCancel = allBooking.filter(x=>/batal|cancel/i.test(x.status || "")).length;
     const cancelRate = nBooking ? Math.round((nCancel / nBooking) * 100) : 0;
     const convRate = nLeads ? ((nBooking / nLeads) * 100).toFixed(1).replace(".", ",") : "0";
-    const durs = bookingP.map(x=>parseInt(String(x.durasi).replace(/[^0-9]/g,""),10)).filter(n=>n>0);
-    const avgDur = durs.length ? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length) : 0;
-    const bookSpark = monthlyCount(bookingP, "tanggal"), survSpark = monthlyCount(surveyP, "tanggal"), moveIn = monthlyCount(filterByPeriod(PENGHUNI, "masuk"), "masuk");
+    // AVG Durasi Sewa (Opsi B): lama tinggal aktual dari sheet Historical Customer (keluar − masuk)
+    const avgDurTxt = (RETENTION && RETENTION.avgTenure != null) ? RETENTION.avgTenure + " bln" : "—";
+    const bookSpark = monthlyCount(allBooking, "tanggal"), survSpark = monthlyCount(SURVEY, "tanggal");
     const cards = [
       { label:"Booking", value:String(nBooking), spark:bookSpark, bg:G.salePink },
       { label:"Cancellation Rate", value:cancelRate+" %", spark:bookSpark, bg:G.saleRed },
       { label:"Conversion Rate", value:convRate+" %", spark:survSpark, bg:G.saleGold },
-      { label:"Retention Rate", value:RETENTION ? RETENTION.rate+" %" : "—", spark:[], bg:G.salePeach }, // dari sheet Historical Customer
-      { label:"AVG Durasi Sewa", value:avgDur?avgDur+" bln":"—", spark:moveIn, bg:G.salePink },
-      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.saleGold },
+      { label:"Retention Rate", value:RETENTION ? RETENTION.rate+" %" : "—", spark:[], bg:G.salePeach }, // sheet Historical Customer
+      { label:"AVG Durasi Sewa", value:avgDurTxt, spark:[], bg:G.salePink },                              // sheet Historical Customer
+      { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:[], bg:G.saleGold },                  // snapshot
     ];
     const prospekDonut = [{t:"Leads",value:nLeads,c:PAL.sales[0]},{t:"Booking",value:nBooking,c:PAL.sales[1]},{t:"Cancel",value:nCancel,c:PAL.sales[2]}];
     const kontrak = STATS.occupied || 0;
-    // Tren Booking sepanjang periode
-    const ts = seriesByDate([{name:"Booking",rows:BOOKING||[],dateKey:"tanggal"},{name:"Survey",rows:SURVEY,dateKey:"tanggal"}], periodRange());
+    // Tren Booking & Survey → satu-satunya viz time-series, IKUT filter periode
+    const ts = seriesByDate([{name:"Booking",rows:allBooking,dateKey:"tanggal"},{name:"Survey",rows:SURVEY,dateKey:"tanggal"}], periodRange());
     const trendCard = ts ? chartCard("Tren Booking & Survey", lineChart(ts.seriesList, ts.labels, ts.names), [{t:"Booking",c:"var(--teal)"},{t:"Survey",c:"var(--text-2)"}]) : emptyCard("Tren Booking & Survey");
-    // Kategori prospek dari kolom Asal survey (periode)
-    const spMap = {}; surveyP.forEach(s => { const a = s.asal || "Lainnya"; spMap[a] = (spMap[a] || 0) + 1; });
+    // Kategori prospek dari kolom Asal survey (agregat, tanpa periode)
+    const spMap = {}; SURVEY.forEach(s => { const a = s.asal || "Lainnya"; spMap[a] = (spMap[a] || 0) + 1; });
     const spTop = Object.entries(spMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
     const kategoriCard = spTop.length ? chartCard("Kategori Prospek", barChart(spTop.map(e=>e[0]),spTop.map(e=>e[1]),"gSale1",barStopsWarm), [{t:"Jumlah Prospek",c:"#e58a6f"}]) : emptyCard("Kategori Prospek");
     const funnelCard = (nLeads || nSurvey || nBooking)
