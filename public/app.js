@@ -266,6 +266,7 @@
     no:r[0], id:r[1], nama:r[2], panggil:r[3], kamar:r[4], jenis:ROOM_TYPE(r[4]),
     asal:r[5], kerja:r[6], instansi:r[7], durasi:r[8], masuk:r[9], tempo:r[10],
     status:r[11], kontak:r[12], kontakNama:r[13], email:r[14],
+    hp:r[12], wa:r[12], // fallback offline (snapshot tak punya No HP Penghuni) — live diisi dari sheet
   }));
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
   let LOGBOOK = [];
@@ -275,6 +276,7 @@
   let TIKET = null, BOOKING = null; // tiket (maintenance) & booking dari tab live
   let DOKUMEN = null; // dokumen dari tab 14_DOKUMEN (per role)
   let KAMAR = null;   // master 30 kamar (tab KAMAR: No Kamar/Tipe/Harga/Status) → sumber okupansi akurat
+  let RETENTION = null; // {rate, churn, total, churned, avgTenure} dari sheet Historical Customer
   const LOG_DIVISI_BY_ROLE = {
     owner:       null,
     admin:       ['Admin', 'Keuangan'],
@@ -310,25 +312,24 @@
           no: String(k.kamar).padStart(2, "0"), _n: +k.kamar,
           jenis: k.tipe || (occ ? occ.jenis : ROOM_TYPE(+k.kamar)),
           penghuni: (occ ? occ.nama : "") || k.nama || "",
-          wa: occ ? occ.kontak : "", harga: fmtRpHarga(k.harga) || PRICE[k.tipe] || "",
+          wa: occ ? occ.hp : "", harga: fmtRpHarga(k.harga) || PRICE[k.tipe] || "",
           status: normRoomStatus(k.status, occ),
         };
       }).sort((a, b) => a._n - b._n);
     } else {
       ROOMS = PENGHUNI.map(p => ({
         no: String(p.kamar).padStart(2, "0"), _n: +p.kamar, jenis: p.jenis,
-        penghuni: p.nama, wa: p.kontak, harga: PRICE[p.jenis] || "",
+        penghuni: p.nama, wa: p.hp, harga: PRICE[p.jenis] || "",
         status: /booking/i.test(p.status || "") ? "Booking" : "Terisi",
       })).sort((a, b) => a._n - b._n);
     }
-    // ---- Metrik turunan ----
+    // ---- Metrik turunan: jatuh tempo pakai Sisa Hari (ambang 7, sesuai PARAMETER) ----
     let aktif = 0, booking = 0, tunggakan = 0, jatuhTempo = 0;
     PENGHUNI.forEach(p => {
       if (/booking/i.test(p.status || "")) booking++; else aktif++;
-      // jatuh tempo: utamakan kolom Flag Tagih dari sheet (LEWAT/SEGERA/Aman), else hitung dari tanggal
-      const f = String(p.flag || "").toUpperCase();
-      if (f) { if (f.includes("LEWAT")) tunggakan++; else if (f.includes("SEGERA")) jatuhTempo++; }
-      else { const d = parseDate(p.tempo); if (d) { const diff = Math.round((d - today) / DAY); if (diff < 0) tunggakan++; else if (diff <= 7) jatuhTempo++; } }
+      let sisa = p.sisa;
+      if (sisa == null) { const d = parseDate(p.tempo); if (d) sisa = Math.round((d - today) / DAY); }
+      if (sisa != null) { if (sisa < 0) tunggakan++; else if (sisa <= 7) jatuhTempo++; }
     });
     let kapasitas, occupied, kosong;
     if (KAMAR && KAMAR.length) {
@@ -565,6 +566,7 @@
           case "tagihan":   return `<td>${tagihanBtn(r.wa)}</td>`;
           case "kontak":    return `<td>${esc(fmtHP(v))}</td>`;
           case "wa":        return `<td>${esc(fmtHP(v))}</td>`;
+          case "hp":        return `<td>${esc(fmtHP(v))}</td>`;
           case "id":        return `<td class="cell-id">${esc(v ?? "")}</td>`;
           default:          return `<td>${esc(v ?? "")}</td>`;
         }
@@ -587,9 +589,10 @@
       {key:"no",label:"No"},{key:"id",label:"ID"},{key:"name",label:"Nama Lengkap"},{key:"panggil",label:"Panggilan"},
       {key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"asal",label:"Asal Daerah"},{key:"kerja",label:"Pekerjaan"},
       {key:"instansi",label:"Instansi"},{key:"durasi",label:"Durasi (Bln)"},{key:"masuk",label:"Tanggal Masuk"},{key:"tempo",label:"Jatuh Tempo"},
-      {key:"kostStatus",label:"Status"},{key:"kontak",label:"Kontak Darurat"},{key:"kontakNama",label:"Nama Kontak"},{key:"email",label:"Email"},
+      {key:"kostStatus",label:"Status"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"},
+      {key:"kontak",label:"Kontak Darurat"},{key:"kontakNama",label:"Nama Kontak"},{key:"email",label:"Email"},
     ],
-    penghuniSales: [{key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"tempo",label:"Tanggal Jatuh Tempo"}],
+    penghuniSales: [{key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"tempo",label:"Tanggal Jatuh Tempo"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"}],
     pembayaran: [
       {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"jenisTx",label:"Jenis Transaksi"},
       {key:"namaTx",label:"Nama Transaksi"},{key:"jumlah",label:"Jumlah"},{key:"keterangan",label:"Keterangan"},
@@ -687,20 +690,17 @@
       { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), spark:tempoSpark, bg:G.adminDarkO, onDark:true },
       { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), spark:tempoSpark, bg:G.adminDarkG, onDark:true },
     ];
-    // Daftar Jatuh Tempo: SELURUH penghuni yang sudah/segera jatuh tempo (Flag LEWAT/SEGERA atau Sisa Hari ≤ 7)
+    // Daftar Jatuh Tempo: SELURUH penghuni dgn Sisa Hari ≤ 7 (ambang dari PARAMETER).
+    // Flag Tagih di sheet tidak konsisten → pakai Sisa Hari (akurat). Fallback hitung dari Tgl Jatuh Tempo.
     const today0 = startOfDay(new Date());
-    const overdue = PENGHUNI.filter(p => {
-      const f = String(p.flag || "").toUpperCase();
-      if (f) return f.includes("LEWAT") || f.includes("SEGERA");
-      if (p.sisa != null) return p.sisa <= 7;
-      const d = parseDate(p.tempo); if (!d) return false;
-      return Math.round((d - today0) / 86400000) <= 7;
-    }).sort((a, b) => (a.sisa ?? 9999) - (b.sisa ?? 9999));
-    const jatuh = overdue.map(p => {
-      const s = p.sisa;
-      const sisaTxt = (s == null) ? "—" : (s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi");
-      return { nama:p.nama, name:p.nama, wa:p.kontak, tempo:p.tempo, sisa:sisaTxt };
-    });
+    const sisaOf = (p) => { if (p.sisa != null) return p.sisa; const d = parseDate(p.tempo); return d ? Math.round((d - today0) / 86400000) : null; };
+    const overdue = PENGHUNI.map(p => ({ p, s: sisaOf(p) }))
+      .filter(x => x.s != null && x.s <= 7)
+      .sort((a, b) => a.s - b.s);
+    const jatuh = overdue.map(({ p, s }) => ({
+      nama:p.nama, name:p.nama, wa:p.hp, tempo:p.tempo,
+      sisa: s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi",
+    }));
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
     // OPEX bar — data real; kosong → empty state
     const obars = F ? topEntries(F.opexBy,4) : [];
@@ -853,7 +853,7 @@
       { label:"Booking", value:String(nBooking), spark:bookSpark, bg:G.salePink },
       { label:"Cancellation Rate", value:cancelRate+" %", spark:bookSpark, bg:G.saleRed },
       { label:"Conversion Rate", value:convRate+" %", spark:survSpark, bg:G.saleGold },
-      { label:"Retention Rate", value:"—", spark:[], bg:G.salePeach }, // butuh Tgl Keluar di sheet
+      { label:"Retention Rate", value:RETENTION ? RETENTION.rate+" %" : "—", spark:[], bg:G.salePeach }, // dari sheet Historical Customer
       { label:"AVG Durasi Sewa", value:avgDur?avgDur+" bln":"—", spark:moveIn, bg:G.salePink },
       { label:"Kamar Isi", value:String(STATS.occupied ?? 0), spark:moveIn, bg:G.saleGold },
     ];
@@ -1452,7 +1452,7 @@
         instansi: col("instansi"), durasi: col("lama tinggal","durasi"), masuk: col("tgl masuk","masuk"),
         tempo: col("jatuh tempo","tempo"), status: col("status"), kontak: col("kontak darurat","kontak"),
         kontakNama: col("nama kontak"), email: col("email"),
-        sisa: col("sisa hari","sisa"), flag: col("flag tagih","flag"),
+        sisa: col("sisa hari","sisa"), flag: col("flag tagih","flag"), hp: col("no hp penghuni","no hp","hp penghuni"),
       };
       const get = (r, i, d="") => (i >= 0 && r[i] != null ? r[i] : d);
       const data = rows.slice(1).filter(r => get(r, ci.nama)).map((r, i) => {
@@ -1464,6 +1464,7 @@
           instansi: get(r, ci.instansi), durasi: get(r, ci.durasi), masuk: get(r, ci.masuk), tempo: get(r, ci.tempo),
           status: get(r, ci.status), kontak: get(r, ci.kontak), kontakNama: get(r, ci.kontakNama), email: get(r, ci.email),
           sisa: sisaRaw === "" ? null : +sisaRaw, flag: get(r, ci.flag),
+          hp: get(r, ci.hp) || get(r, ci.kontak), wa: get(r, ci.hp) || get(r, ci.kontak), // No HP Penghuni → tombol WA
         };
       });
       if (data.length) { PENGHUNI = data; recomputeFromPenghuni(); }
@@ -1580,6 +1581,19 @@
           id:x.id, kamar:+String(x.kamar).replace(/[^0-9]/g, ""), nama:x.nama, tipe:x.tipe, harga:x.harga, status:x.status,
         }));
         if (K.length) { KAMAR = K; recomputeFromPenghuni(); } // hitung ulang ROOMS/STATS dgn master kamar
+      }
+      // Historical Customer → Retention Rate (ID | Nama Lengkap | Tanggal Masuk | Tanggal Keluar)
+      const histTab = findTab(h => has(h, "nama lengkap") && has(h, "tanggal masuk") && has(h, "tanggal keluar"));
+      if (histTab) {
+        const o = objs(histTab, { nama:["nama lengkap","nama"], masuk:["tanggal masuk"], keluar:["tanggal keluar"] });
+        const recs = o.filter(x => x.nama);
+        const hasKeluar = (v) => { const t = String(v || "").trim(); return t && t !== "-"; };
+        const churnedRecs = recs.filter(x => hasKeluar(x.keluar));
+        const total = recs.length, churned = churnedRecs.length;
+        // rata-rata lama tinggal (bln) dari yang sudah keluar
+        const tenures = churnedRecs.map(x => { const a = parseDate(x.masuk), b = parseDate(x.keluar); return (a && b) ? (b - a) / 2629800000 : null; }).filter(v => v != null && v >= 0);
+        const avgTenure = tenures.length ? Math.round(tenures.reduce((s, v) => s + v, 0) / tenures.length) : null;
+        if (total) RETENTION = { total, churned, rate: Math.round(((total - churned) / total) * 100), churn: Math.round((churned / total) * 100), avgTenure };
       }
       // Dokumen (14_DOKUMEN)
       const dokTab = findTab(h => has(h, "judul") && (has(h, "role") || has(h, "link drive")));
