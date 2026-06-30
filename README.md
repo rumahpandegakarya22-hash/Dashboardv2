@@ -99,9 +99,18 @@ Pilihan **$0/bulan, tanpa kartu sama sekali**, dan **tanpa batasan desain UI/UX*
      - `UPSTASH_REDIS_REST_URL` = dari Upstash
      - `UPSTASH_REDIS_REST_TOKEN` = dari Upstash
      - `NODE_ENV` = `production`
+     - `RESEND_API_KEY` = dari [resend.com](https://resend.com) **(WAJIB untuk OTP email: verifikasi pendaftaran & lupa password)**
+     - `MAIL_FROM` = mis. `Kost Tiga Dara <onboarding@resend.dev>` (atari alamat domain terverifikasi di Resend)
    - Dapat URL `https://<proyek>.vercel.app`.
 
 > Di Vercel, akun **wajib** disimpan di Upstash (FS ephemeral) dan `JWT_SECRET` **wajib** via env. Tanpa keduanya, login tidak persisten.
+
+### Email OTP (verifikasi pendaftaran + lupa password)
+- Registrasi akun baru kini **wajib email** dan **diverifikasi via OTP** sebelum akun masuk antrean approval Owner.
+- **Lupa password**: di halaman login → "Lupa password?" → masukkan **username + email terdaftar** (harus cocok) → OTP dikirim ke email itu → masukkan OTP + password baru.
+- OTP dikirim via **Resend** (HTTP API). Set `RESEND_API_KEY` + `MAIL_FROM` di env. **Tanpa `RESEND_API_KEY`**, OTP tidak terkirim — di mode dev (lokal) kode OTP dicetak ke **log server** untuk pengujian.
+- OTP disimpan sementara (hash + kedaluwarsa) di Upstash Redis; maksimal 5 percobaan, register OTP 15 menit, reset OTP 10 menit.
+- Akun seed (owner/admin/dll) belum punya email → set lewat env `OWNER_EMAIL`, `ADMIN_EMAIL`, dst (opsional) agar bisa pakai reset OTP. **Tidak ada secret di repo** — semua via env.
 
 ## Deploy GRATIS #2 (Render + Upstash Redis)
 

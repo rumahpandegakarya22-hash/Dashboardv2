@@ -83,6 +83,7 @@ function ensureDir() { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { re
 function seedUsers() {
   return SEED.map((u) => ({
     username: u.username, role: u.role, name: u.name,
+    email: process.env[`${u.role.toUpperCase()}_EMAIL`] || null, // utk reset OTP; set via env bila perlu
     passwordHash: bcrypt.hashSync(seedPassword(u.role), 10),
     status: "active",              // active | pending | disabled
     tfaEnabled: false, tfaSecret: null,
@@ -96,6 +97,7 @@ function applyMigrations(users) {
     if (u.status === undefined) { u.status = "active"; changed = true; }
     if (u.tfaEnabled === undefined) { u.tfaEnabled = false; changed = true; }
     if (u.tfaSecret === undefined) { u.tfaSecret = null; changed = true; }
+    if (u.email === undefined) { u.email = null; changed = true; }
   }
   return changed;
 }
@@ -131,6 +133,45 @@ async function saveUsers(u) {
   else { ensureDir(); fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2)); }
 }
 
+/* ---- KV singkat berdurasi (OTP & pending registrasi) ----
+   Redis: kirim command sebagai array JSON ke root URL (aman utk nilai apa pun + TTL).
+   Tanpa Redis (dev lokal): simpan di memori proses. */
+const MEM = new Map();
+async function redisCmd(args) {
+  const r = await fetch(REDIS_URL, { method: "POST", headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify(args) });
+  if (!r.ok) throw new Error("Redis " + args[0] + " " + r.status);
+  return (await r.json()).result;
+}
+async function kvPut(key, value, ttlSec) {
+  if (USE_REDIS) return redisCmd(["SET", key, value, "EX", String(ttlSec)]);
+  MEM.set(key, { value, exp: Date.now() + ttlSec * 1000 });
+}
+async function kvGet(key) {
+  if (USE_REDIS) return redisCmd(["GET", key]);
+  const e = MEM.get(key); if (!e) return null; if (e.exp < Date.now()) { MEM.delete(key); return null; } return e.value;
+}
+async function kvDel(key) { if (USE_REDIS) return redisCmd(["DEL", key]); MEM.delete(key); }
+
+/* ---- Email via Resend (HTTP API). Tanpa RESEND_API_KEY → log ke konsol (mode dev). ---- */
+async function sendMail(to, subject, html) {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.MAIL_FROM || `${APP_NAME} <onboarding@resend.dev>`;
+  if (!key) { console.log(`\n[mail:DEV] (set RESEND_API_KEY untuk kirim sungguhan)\n  to: ${to}\n  subj: ${subject}\n  ${String(html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}\n`); return { dev: true }; }
+  const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to, subject, html }) });
+  if (!r.ok) throw new Error("Gagal mengirim email (" + r.status + ")");
+  return r.json();
+}
+const genOtp = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+const otpHtml = (kode, ctx) => `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:480px;margin:auto;padding:8px">
+  <h2 style="color:#C92D31;margin:0 0 6px">${APP_NAME}</h2>
+  <p style="margin:0 0 4px">Kode OTP untuk <b>${ctx}</b>:</p>
+  <p style="font-size:32px;font-weight:800;letter-spacing:10px;margin:10px 0;color:#111">${kode}</p>
+  <p style="color:#666;font-size:13px;margin:0">Berlaku 10 menit. Jangan bagikan kode ini. Jika Anda tidak meminta, abaikan email ini.</p>
+</div>`;
+const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
+const normEmail = (e) => String(e || "").trim().toLowerCase();
+const findByEmail = (users, email) => users.find((u) => normEmail(u.email) && normEmail(u.email) === normEmail(email));
+
 function getSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET; // WAJIB di serverless (Vercel) — FS read-only
   try {
@@ -148,7 +189,7 @@ function getSecret() {
 const findUser = (users, username) =>
   users.find((u) => u.username.toLowerCase() === String(username).toLowerCase().trim());
 // data yang aman dikirim ke klien (tanpa hash/secret)
-const publicUser = (u) => ({ username: u.username, role: u.role, name: u.name, status: u.status, tfaEnabled: !!u.tfaEnabled });
+const publicUser = (u) => ({ username: u.username, role: u.role, name: u.name, status: u.status, tfaEnabled: !!u.tfaEnabled, email: u.email || null });
 
 const SECRET = getSecret();
 if (IS_PROD && !process.env.JWT_SECRET) {
@@ -282,28 +323,94 @@ const authLimiter = rateLimit({
   message: { error: "Terlalu banyak percobaan. Coba lagi dalam beberapa menit." },
 });
 
-/* ----------------------------------------------------------- REGISTER */
+/* ----------------------------------------------------------- REGISTER (step 1: kirim OTP email) */
 app.post("/api/register", authLimiter, async (req, res) => {
-  const { username, password, name } = req.body || {};
-  if (!username || !password || !name) return res.status(400).json({ error: "Nama, username, dan password wajib diisi" });
+  const { username, password, name, email } = req.body || {};
+  if (!username || !password || !name || !email) return res.status(400).json({ error: "Nama, username, email, dan password wajib diisi" });
   const uname = String(username).trim(), uname_name = String(name).trim();
   if (uname.length < 3 || uname.length > 32) return res.status(400).json({ error: "Username 3–32 karakter" });
   if (!/^[a-zA-Z0-9._-]+$/.test(uname)) return res.status(400).json({ error: "Username hanya boleh huruf, angka, titik, garis bawah, dan strip" });
   if (uname_name.length < 1 || uname_name.length > 60) return res.status(400).json({ error: "Nama maksimal 60 karakter" });
+  if (!validEmail(email)) return res.status(400).json({ error: "Format email tidak valid" });
   if (String(password).length < 8 || String(password).length > 200) return res.status(400).json({ error: "Password 8–200 karakter" });
   let users;
   try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
   if (findUser(users, username)) return res.status(409).json({ error: "Username sudah dipakai" });
-  users.push({
-    username: String(username).trim(), name: String(name).trim(),
-    role: null,                  // role ditetapkan owner saat approve
-    passwordHash: bcrypt.hashSync(String(password), 10),
-    status: "pending",
-    tfaEnabled: false, tfaSecret: null,
-    createdAt: new Date().toISOString(),
-  });
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan akun" }); }
-  res.status(201).json({ ok: true, message: "Akun dibuat. Menunggu persetujuan Owner sebelum bisa login." });
+  if (findByEmail(users, email)) return res.status(409).json({ error: "Email sudah terdaftar" });
+  // simpan pending registrasi + OTP (belum membuat akun sampai email terverifikasi)
+  const otp = genOtp();
+  const pending = { username: uname, name: uname_name, email: normEmail(email), passwordHash: bcrypt.hashSync(String(password), 10), otpHash: bcrypt.hashSync(otp, 10), attempts: 0 };
+  try {
+    await kvPut("ktd:reg:" + uname.toLowerCase(), JSON.stringify(pending), 900); // 15 menit
+    await sendMail(normEmail(email), `${APP_NAME} — Kode verifikasi pendaftaran`, otpHtml(otp, "verifikasi pendaftaran"));
+  } catch (e) { return res.status(502).json({ error: "Gagal mengirim OTP. Coba lagi nanti." }); }
+  res.status(200).json({ ok: true, needVerify: true, username: uname, message: "Kode OTP dikirim ke email Anda. Masukkan untuk menyelesaikan pendaftaran." });
+});
+
+/* ----------------------------------------------------------- REGISTER (step 2: verifikasi OTP → buat akun) */
+app.post("/api/register/verify", authLimiter, async (req, res) => {
+  const { username, otp } = req.body || {};
+  if (!username || !otp) return res.status(400).json({ error: "Username dan kode OTP wajib diisi" });
+  const key = "ktd:reg:" + String(username).toLowerCase().trim();
+  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
+  if (!raw) return res.status(410).json({ error: "Kode kedaluwarsa. Silakan daftar ulang." });
+  const p = JSON.parse(raw);
+  if (p.attempts >= 5) { await kvDel(key); return res.status(429).json({ error: "Terlalu banyak percobaan. Daftar ulang." }); }
+  if (!bcrypt.compareSync(String(otp).trim(), p.otpHash)) { p.attempts++; await kvPut(key, JSON.stringify(p), 900); return res.status(401).json({ error: "Kode OTP salah" }); }
+  let users; try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
+  if (findUser(users, p.username)) { await kvDel(key); return res.status(409).json({ error: "Username sudah dipakai" }); }
+  users.push({ username: p.username, name: p.name, email: p.email, role: null, passwordHash: p.passwordHash, status: "pending", tfaEnabled: false, tfaSecret: null, createdAt: new Date().toISOString() });
+  try { await saveUsers(users); await kvDel(key); } catch { return res.status(500).json({ error: "Gagal menyimpan akun" }); }
+  res.status(201).json({ ok: true, message: "Email terverifikasi. Akun dibuat — menunggu persetujuan Owner sebelum bisa login." });
+});
+
+/* ----------------------------------------------------------- REGISTER (kirim ulang OTP) */
+app.post("/api/register/resend", authLimiter, async (req, res) => {
+  const { username } = req.body || {};
+  const key = "ktd:reg:" + String(username || "").toLowerCase().trim();
+  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
+  if (!raw) return res.status(410).json({ error: "Sesi pendaftaran kedaluwarsa. Daftar ulang." });
+  const p = JSON.parse(raw); const otp = genOtp(); p.otpHash = bcrypt.hashSync(otp, 10); p.attempts = 0;
+  try { await kvPut(key, JSON.stringify(p), 900); await sendMail(p.email, `${APP_NAME} — Kode verifikasi pendaftaran`, otpHtml(otp, "verifikasi pendaftaran")); }
+  catch { return res.status(502).json({ error: "Gagal mengirim OTP" }); }
+  res.json({ ok: true, message: "OTP baru dikirim." });
+});
+
+/* ----------------------------------------------------------- LUPA PASSWORD (step 1: kirim OTP) */
+app.post("/api/forgot", authLimiter, async (req, res) => {
+  const { username, email } = req.body || {};
+  // Respons SELALU generik (jangan bocorkan apakah akun/email ada)
+  const generic = { ok: true, message: "Jika username & email cocok, kode OTP telah dikirim ke email tersebut." };
+  if (!username || !email) return res.status(400).json({ error: "Username dan email wajib diisi" });
+  try {
+    const users = await loadUsers();
+    const user = findUser(users, username);
+    if (user && user.status !== "disabled" && normEmail(user.email) && normEmail(user.email) === normEmail(email)) {
+      const otp = genOtp();
+      await kvPut("ktd:reset:" + user.username.toLowerCase(), JSON.stringify({ email: normEmail(user.email), otpHash: bcrypt.hashSync(otp, 10), attempts: 0 }), 600); // 10 menit
+      await sendMail(normEmail(user.email), `${APP_NAME} — Kode reset password`, otpHtml(otp, "reset password"));
+    }
+  } catch { /* tetap balas generik */ }
+  res.json(generic);
+});
+
+/* ----------------------------------------------------------- LUPA PASSWORD (step 2: verifikasi OTP → set password) */
+app.post("/api/reset", authLimiter, async (req, res) => {
+  const { username, email, otp, newPassword } = req.body || {};
+  if (!username || !email || !otp || !newPassword) return res.status(400).json({ error: "Username, email, OTP, dan password baru wajib diisi" });
+  if (String(newPassword).length < 8 || String(newPassword).length > 200) return res.status(400).json({ error: "Password baru 8–200 karakter" });
+  const key = "ktd:reset:" + String(username).toLowerCase().trim();
+  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
+  if (!raw) return res.status(410).json({ error: "Kode kedaluwarsa atau tidak ditemukan. Minta OTP lagi." });
+  const r = JSON.parse(raw);
+  if (r.attempts >= 5) { await kvDel(key); return res.status(429).json({ error: "Terlalu banyak percobaan. Minta OTP lagi." }); }
+  if (normEmail(email) !== r.email || !bcrypt.compareSync(String(otp).trim(), r.otpHash)) { r.attempts++; await kvPut(key, JSON.stringify(r), 600); return res.status(401).json({ error: "Email atau kode OTP salah" }); }
+  let users; try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
+  const user = findUser(users, username);
+  if (!user || normEmail(user.email) !== r.email) { await kvDel(key); return res.status(400).json({ error: "Akun tidak cocok" }); }
+  user.passwordHash = bcrypt.hashSync(String(newPassword), 10);
+  try { await saveUsers(users); await kvDel(key); } catch { return res.status(500).json({ error: "Gagal menyimpan" }); }
+  res.json({ ok: true, message: "Password berhasil diubah. Silakan login dengan password baru." });
 });
 
 /* ----------------------------------------------------------- LOGIN (step 1) */

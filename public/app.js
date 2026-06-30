@@ -964,7 +964,7 @@
   /* ----------------------------------------------------- LOGIN */
   const loginBrand = `<div class="login-brand"><span class="brand__logo">${I.home}</span><div><b>Kost Tiga Dara</b><small>Management Dashboard</small></div></div>`;
 
-  function loginScreen(errorMsg) {
+  function loginScreen(errorMsg, okMsg) {
     return `<div class="login">
       <form class="login-card" id="loginForm" autocomplete="on">
         ${loginBrand}
@@ -975,7 +975,9 @@
         <div class="login-field"><label for="lpass">Password</label>
           <input class="login-input" id="lpass" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required></div>
         <p class="login-error" id="loginError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
+        <p class="login-ok" id="loginOk"${okMsg ? "" : " hidden"}>${okMsg || ""}</p>
         <button type="submit" class="login-btn" id="loginSubmit">${I.lock} Masuk</button>
+        <p class="login-hint"><a href="#" id="toForgot">Lupa password?</a></p>
         <p class="login-hint">Belum punya akun? <a href="#" id="toRegister">Daftar di sini</a></p>
       </form></div>`;
   }
@@ -990,6 +992,8 @@
           <input class="login-input" id="rname" name="name" type="text" autocomplete="name" placeholder="cth. Budi Santoso" required></div>
         <div class="login-field"><label for="ruser">Username</label>
           <input class="login-input" id="ruser" name="username" type="text" autocomplete="username" placeholder="min. 3 karakter" required></div>
+        <div class="login-field"><label for="remail">Email</label>
+          <input class="login-input" id="remail" name="email" type="email" autocomplete="email" placeholder="email@contoh.com" required></div>
         <div class="login-field"><label for="rpass">Password</label>
           <input class="login-input" id="rpass" name="password" type="password" autocomplete="new-password" placeholder="min. 8 karakter" required></div>
         <p class="login-error" id="regError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
@@ -1010,6 +1014,56 @@
         <p class="login-error" id="otpError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
         <button type="submit" class="login-btn" id="otpSubmit">${I.lock} Verifikasi</button>
         <p class="login-hint"><a href="#" id="otpBack">← Kembali ke login</a></p>
+      </form></div>`;
+  }
+
+  // Verifikasi OTP email saat PENDAFTARAN akun baru
+  function regVerifyScreen(errorMsg, okMsg) {
+    return `<div class="login">
+      <form class="login-card" id="regVerifyForm" autocomplete="off">
+        ${loginBrand}
+        <h1 class="login-title">Verifikasi Email</h1>
+        <p class="login-sub">Kami mengirim 6 digit kode ke email Anda. Masukkan untuk menyelesaikan pendaftaran.</p>
+        <div class="login-field"><label for="rvCode">Kode OTP</label>
+          <input class="login-input login-otp" id="rvCode" name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" required></div>
+        <p class="login-error" id="rvError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
+        <p class="login-ok" id="rvOk"${okMsg ? "" : " hidden"}>${okMsg || ""}</p>
+        <button type="submit" class="login-btn" id="rvSubmit">${I.lock} Verifikasi & Daftar</button>
+        <p class="login-hint"><a href="#" id="rvResend">Kirim ulang kode</a> · <a href="#" id="rvBack">← Batal</a></p>
+      </form></div>`;
+  }
+
+  // Lupa password — langkah 1: minta username + email (harus cocok dgn register)
+  function forgotScreen(errorMsg) {
+    return `<div class="login">
+      <form class="login-card" id="forgotForm" autocomplete="on">
+        ${loginBrand}
+        <h1 class="login-title">Lupa Password</h1>
+        <p class="login-sub">Masukkan username & email terdaftar. Kode OTP dikirim ke email tersebut.</p>
+        <div class="login-field"><label for="fuser">Username</label>
+          <input class="login-input" id="fuser" name="username" type="text" autocomplete="username" placeholder="Username" required></div>
+        <div class="login-field"><label for="femail">Email Terdaftar</label>
+          <input class="login-input" id="femail" name="email" type="email" autocomplete="email" placeholder="email@contoh.com" required></div>
+        <p class="login-error" id="fError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
+        <button type="submit" class="login-btn" id="fSubmit">${I.lock} Kirim OTP</button>
+        <p class="login-hint"><a href="#" id="fBack">← Kembali ke login</a></p>
+      </form></div>`;
+  }
+
+  // Lupa password — langkah 2: OTP + password baru
+  function resetScreen(errorMsg) {
+    return `<div class="login">
+      <form class="login-card" id="resetForm" autocomplete="off">
+        ${loginBrand}
+        <h1 class="login-title">Reset Password</h1>
+        <p class="login-sub">Masukkan kode OTP dari email & password baru Anda.</p>
+        <div class="login-field"><label for="rsCode">Kode OTP</label>
+          <input class="login-input login-otp" id="rsCode" name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" required></div>
+        <div class="login-field"><label for="rsPass">Password Baru</label>
+          <input class="login-input" id="rsPass" name="newPassword" type="password" autocomplete="new-password" placeholder="min. 8 karakter" required></div>
+        <p class="login-error" id="rsError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
+        <button type="submit" class="login-btn" id="rsSubmit">${I.lock} Simpan Password</button>
+        <p class="login-hint"><a href="#" id="rsBack">← Kembali ke login</a></p>
       </form></div>`;
   }
 
@@ -1067,8 +1121,11 @@
     if (!cur.auth) {
       root.className = "app app--login";
       if (cur.authView === "register") { root.innerHTML = registerScreen(); }
+      else if (cur.authView === "regverify") { root.innerHTML = regVerifyScreen(); }
+      else if (cur.authView === "forgot") { root.innerHTML = forgotScreen(); }
+      else if (cur.authView === "reset") { root.innerHTML = resetScreen(); }
       else if (cur.authView === "otp") { root.innerHTML = otpScreen(); }
-      else { root.innerHTML = loginScreen(); }
+      else { const m = cur.flash; cur.flash = null; root.innerHTML = loginScreen(null, m); }
       bindAuth(root); return;
     }
     const role = ROLES[cur.role];
@@ -1101,6 +1158,10 @@
     root.querySelector("#toRegister")?.addEventListener("click", (e) => { e.preventDefault(); goto("register"); });
     root.querySelector("#toLogin")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#otpBack")?.addEventListener("click", (e) => { e.preventDefault(); cur.tfaTicket = null; goto("login"); });
+    root.querySelector("#toForgot")?.addEventListener("click", (e) => { e.preventDefault(); goto("forgot"); });
+    root.querySelector("#rvBack")?.addEventListener("click", (e) => { e.preventDefault(); cur.pendingUser = null; goto("login"); });
+    root.querySelector("#fBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
+    root.querySelector("#rsBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
 
     // --- LOGIN (step 1) ---
     root.querySelector("#loginForm")?.addEventListener("submit", async (e) => {
@@ -1137,21 +1198,81 @@
       }
     });
 
-    // --- REGISTER ---
+    // --- REGISTER (step 1: kirim OTP ke email) ---
     root.querySelector("#registerForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#regSubmit"), errEl = root.querySelector("#regError"), okEl = root.querySelector("#regOk");
-      const name = root.querySelector("#rname").value.trim(), username = root.querySelector("#ruser").value.trim(), password = root.querySelector("#rpass").value;
+      const name = root.querySelector("#rname").value.trim(), username = root.querySelector("#ruser").value.trim(), email = root.querySelector("#remail").value.trim(), password = root.querySelector("#rpass").value;
       errEl.hidden = true; okEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/register", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, username, password }) });
+        const res = await fetch("/api/register", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, username, email, password }) });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Gagal mendaftar");
-        okEl.textContent = data.message || "Akun dibuat. Menunggu persetujuan Owner."; okEl.hidden = false;
-        root.querySelector("#registerForm").reset();
+        cur.pendingUser = data.username || username; goto("regverify"); // lanjut verifikasi OTP
       } catch (err) {
         errEl.textContent = err.message; errEl.hidden = false;
-      } finally {
+        btn.disabled = false; btn.classList.remove("is-loading");
+      }
+    });
+
+    // --- REGISTER (step 2: verifikasi OTP email → buat akun) ---
+    root.querySelector("#regVerifyForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = root.querySelector("#rvSubmit"), errEl = root.querySelector("#rvError");
+      const otp = root.querySelector("#rvCode").value.trim();
+      errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
+      try {
+        const res = await fetch("/api/register/verify", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.pendingUser, otp }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Verifikasi gagal");
+        cur.pendingUser = null; cur.flash = data.message || "Akun dibuat. Menunggu persetujuan Owner."; goto("login");
+      } catch (err) {
+        errEl.textContent = err.message; errEl.hidden = false;
+        btn.disabled = false; btn.classList.remove("is-loading");
+      }
+    });
+    root.querySelector("#rvResend")?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const okEl = root.querySelector("#rvOk"), errEl = root.querySelector("#rvError");
+      errEl.hidden = true; okEl.hidden = true;
+      try {
+        const res = await fetch("/api/register/resend", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.pendingUser }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Gagal mengirim ulang");
+        okEl.textContent = data.message || "OTP baru dikirim."; okEl.hidden = false;
+      } catch (err) { errEl.textContent = err.message; errEl.hidden = false; }
+    });
+
+    // --- LUPA PASSWORD (step 1: minta OTP) ---
+    root.querySelector("#forgotForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = root.querySelector("#fSubmit"), errEl = root.querySelector("#fError");
+      const username = root.querySelector("#fuser").value.trim(), email = root.querySelector("#femail").value.trim();
+      errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
+      try {
+        const res = await fetch("/api/forgot", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username, email }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Gagal");
+        cur.resetUser = username; cur.resetEmail = email; goto("reset"); // selalu lanjut (respons generik)
+      } catch (err) {
+        errEl.textContent = err.message; errEl.hidden = false;
+        btn.disabled = false; btn.classList.remove("is-loading");
+      }
+    });
+
+    // --- LUPA PASSWORD (step 2: OTP + password baru) ---
+    root.querySelector("#resetForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = root.querySelector("#rsSubmit"), errEl = root.querySelector("#rsError");
+      const otp = root.querySelector("#rsCode").value.trim(), newPassword = root.querySelector("#rsPass").value;
+      errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
+      try {
+        const res = await fetch("/api/reset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.resetUser, email: cur.resetEmail, otp, newPassword }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Gagal reset");
+        cur.resetUser = null; cur.resetEmail = null; cur.flash = data.message || "Password berhasil diubah. Silakan login."; goto("login");
+      } catch (err) {
+        errEl.textContent = err.message; errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
