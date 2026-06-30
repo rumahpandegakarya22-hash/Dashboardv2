@@ -920,8 +920,9 @@ body.theme-light {
    Material kaca cair: frost lebih dalam + rim-light spekular + kedalaman
    mengambang + interaksi pegas. Dark & light. Struktur tidak diubah. ========= */
 :root {
-  --glass-blur:      38px;   /* frost utama (panel, kartu, modal) */
-  --glass-blur-sm:   20px;   /* frost ringan (sidebar, 30 kartu kamar) */
+  --glass-blur:      10px;   /* frost tipis untuk semua elemen konten */
+  --glass-blur-sm:   10px;   /* idem (kartu kamar, scorecard) */
+  --glass-blur-nav:  30px;   /* khusus topbar (headbar) + sidebar */
   --glass-saturate:  185%;   /* warna mesh "membias" lewat kaca */
   /* rim kaca: highlight tepi atas + garis dalam + glow bawah lembut */
   --lg-rim:    inset 0 1px 0 rgba(255,255,255,.34), inset 0 0 0 1px rgba(255,255,255,.06), inset 0 -12px 28px -16px rgba(255,255,255,.08);
@@ -949,6 +950,11 @@ body { background-size: 160% 160%, 150% 150%, 170% 170%, 150% 150%, 100% 100%; }
 .stat-card {
   -webkit-backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur-sm)) saturate(var(--glass-saturate));
+}
+/* Headbar (topbar) + sidebar = frost lebih kuat (30px), berbeda dari konten (10px) */
+.topbar, .sidebar {
+  -webkit-backdrop-filter: blur(var(--glass-blur-nav)) saturate(var(--glass-saturate)) !important;
+  backdrop-filter: blur(var(--glass-blur-nav)) saturate(var(--glass-saturate)) !important;
 }
 
 /* Garis spekular tepi atas pada panel/topbar/sidebar (refleksi cahaya) */
