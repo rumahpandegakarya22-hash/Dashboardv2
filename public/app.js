@@ -343,18 +343,10 @@
       aktif, booking, tunggakan, jatuhTempo, kapasitas, occupied, kosong,
       okupansi: kapasitas ? Math.round((occupied / kapasitas) * 100) : 0,
     };
-    // Data Pembayaran (fallback dari PENGHUNI bila TRANSAKSI belum live) —
-    // struktur baru: Tanggal | Jenis Transaksi | Nama Transaksi | Jumlah | Keterangan
-    PEMBAYARAN = PENGHUNI.slice(0, 14).map((p) => {
-      const isDP = p.status === "Booking (DP)";
-      return {
-        tanggal: p.masuk,
-        jenisTx: { t:"Pemasukan", c:"s-complete" },
-        namaTx: "Pembayaran Sewa " + (p.panggil || p.nama),
-        jumlah: "Rp" + (PRICE[p.jenis] || 0).toLocaleString("id-ID"),
-        keterangan: "Kamar " + p.kamar + " · " + (isDP ? "DP" : "Pelunasan"),
-      };
-    });
+    // CATATAN: Data Pembayaran TIDAK lagi dibuat dari PENGHUNI (dulu fallback ini
+    // MENIMPA data jurnal live karena recompute dipanggil ulang saat hidrasi KAMAR,
+    // dan menampilkan "pembayaran" fiktif dari Tgl Masuk penghuni). PEMBAYARAN kini
+    // HANYA diisi dari jurnal TRANSAKSI (3_KEUANGAN); kosong = tampil "Tidak ada data".
   }
   // NB: recomputeFromPenghuni() memanggil parseDate (butuh MONTHS_ID, dideklarasikan
   // di bawah). Panggilan awal dipindah ke setelah parseDate siap (cari INIT_RECOMPUTE).
