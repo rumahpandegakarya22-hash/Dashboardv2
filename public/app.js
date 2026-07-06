@@ -503,7 +503,17 @@
     if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
     m = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);      // 25 Mei 2026 / 2 Jun 2026
     if (m) { const mon = MONTHS_ID[m[2].toLowerCase()]; if (mon != null) return new Date(+m[3], mon, +m[1]); }
+    m = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);   // 15/06/2026 (dd/mm/yyyy — hasil IMPORTRANGE)
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+    // Angka serial Google Sheets (IMPORTRANGE membawa NILAI tanggal, bukan teks): 46188 → 15 Jun 2026.
+    // Epoch spreadsheet = 30 Des 1899. Rentang 25000–60000 ≈ tahun 1968–2064 (hindari salah tangkap nominal).
+    if (/^\d{5}(\.\d+)?$/.test(s)) { const n = Math.floor(+s); if (n >= 25000 && n <= 60000) { const d = new Date(1899, 11, 30); d.setDate(d.getDate() + n); return d; } }
     return null;
+  }
+  // tampilkan tanggal apa pun formatnya (teks/serial/dd-mm) sebagai "6 Jul 2026"
+  function fmtDateID(str) {
+    const d = parseDate(str);
+    return d ? d.getDate() + " " + MONTH_ID3[d.getMonth()] + " " + d.getFullYear() : String(str || "");
   }
   // seperti parseDate, tapi menangkap jam:menit bila ada (untuk hitung Response Time satuan jam)
   function parseDateTime(str) {
@@ -556,7 +566,7 @@
     const body = data.map(r => {
       const tds = cols.map(col => {
         const k = col.key, v = r[k];
-        if (DATE_KEYS.has(k)) return `<td><span class="cell-date">${I.cal}${esc(v ?? "")}</span></td>`;
+        if (DATE_KEYS.has(k)) return `<td><span class="cell-date">${I.cal}${esc(fmtDateID(v))}</span></td>`;
         switch (k) {
           case "check":     return `<td><span class="cbox ${r.sel ? "on" : ""}"></span></td>`;
           case "name":      return `<td><span class="cell-name"><span class="avatar">${esc(initials(r.nama || r.name || v))}</span>${esc(r.nama || r.name || v)}</span></td>`;
@@ -1501,7 +1511,12 @@
 
     // theme / refresh / fullscreen
     root.querySelector("#themeToggle")?.addEventListener("click", () => { cur.theme = cur.theme === "light" ? "dark" : "light"; localStorage.setItem("ktd-theme", cur.theme); render(); });
-    root.querySelector("#refreshBtn")?.addEventListener("click", (e) => { const b = e.currentTarget; b.classList.add("spin"); setTimeout(render, 350); });
+    // Refresh = tarik ULANG data dari /api/sheets (bukan sekadar render ulang)
+    root.querySelector("#refreshBtn")?.addEventListener("click", async (e) => {
+      const b = e.currentTarget; b.classList.add("spin");
+      try { await loadLiveData(); } catch {}
+      render();
+    });
     root.querySelector("#fullscreenBtn")?.addEventListener("click", () => {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.();
     });
@@ -1779,7 +1794,7 @@
         }
       }
       out.push({
-        tanggal: tgl,
+        tanggal: fmtDateID(tgl), // normalisasi tampilan (serial/dd-mm → "6 Jul 2026")
         jenisTx: jenis === "Pemasukan" ? { t: "Pemasukan", c: "s-complete" } : { t: "Pengeluaran", c: "s-pending" },
         namaTx, jumlah: "Rp" + nominal.toLocaleString("id-ID"), keterangan: extra,
       });
