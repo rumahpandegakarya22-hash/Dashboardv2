@@ -993,8 +993,11 @@ body:not(.theme-light) :is(.card, .stat-card, .rooms .room, .login-card) {
   color: #fff;
 }
 
-/* Garis spekular tepi atas pada panel/topbar/sidebar (refleksi cahaya) */
-.app, .topbar, .sidebar { position: relative; }
+/* Garis spekular tepi atas pada panel/topbar (refleksi cahaya).
+   JANGAN sertakan .sidebar di sini: position:relative akan MENIMPA
+   position:fixed milik drawer mobile (@media ≤900px) karena kalah cascade —
+   itu bug "konten terdorong ke bawah, setengah atas kosong" di HP. */
+.app, .topbar { position: relative; }
 .app::after, .topbar::after {
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
   background: var(--glass-edge); pointer-events: none; z-index: 6;
