@@ -1106,7 +1106,7 @@
         <label class="search"><span>${I.search}</span><input type="text" id="globalSearch" placeholder="Search"><kbd>⌘ /</kbd></label>
         <button class="topbar__icon" id="themeToggle" aria-label="Tema" title="Mode gelap/terang">${cur.theme === "light" ? I.moon : I.sun}</button>
         <button class="topbar__icon" id="refreshBtn" aria-label="Refresh" title="Muat ulang data">${I.refresh}</button>
-        <button class="topbar__icon" aria-label="Notifikasi" title="Notifikasi">${I.bell}</button>
+        <button class="topbar__icon topbar__bell" aria-label="Notifikasi" title="Notifikasi">${I.bell}</button>
         <button class="topbar__icon" id="fullscreenBtn" aria-label="Layar penuh" title="Layar penuh">${I.expand}</button>
       </div></header>`;
   }

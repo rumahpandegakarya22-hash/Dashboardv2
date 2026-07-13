@@ -75,7 +75,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 * { margin: 0; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
 
 body {
   font-family: var(--font);
@@ -252,9 +252,10 @@ img { display: block; max-width: 100%; }
 }
 .topbar__icon:hover { background: rgba(255,255,255,.05); color: var(--text); }
 .topbar__icon svg { width: 16px; height: 16px; }
-.crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-3); }
-.crumbs .sep { color: var(--text-3); }
-.crumbs .cur { color: var(--text); }
+.crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-3); min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.crumbs .sep { color: var(--text-3); flex: none; }
+.crumbs span:first-child { flex: none; }
+.crumbs .cur { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .topbar__right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .search {
@@ -294,6 +295,7 @@ img { display: block; max-width: 100%; }
 
 .page-head {
   display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  flex-wrap: wrap; row-gap: 8px;
 }
 .seg {
   display: inline-flex; align-items: center; gap: 2px;
@@ -800,6 +802,11 @@ body.theme-light .cell-select { background-color: rgba(0,0,0,.03); }
   .menu-toggle { display: grid; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .rooms { grid-template-columns: 1fr 1fr; }
+  /* sidebar sudah jadi drawer (menu-toggle + scrim) → tombol "sembunyikan sidebar" desktop mubazir */
+  #sidebarToggle { display: none; }
+  .topbar { padding: 0 16px; gap: 6px; }
+  .search input { width: 130px; }
+  .search kbd { display: none; }
 }
 
 @media (max-width: 600px) {
@@ -808,7 +815,25 @@ body.theme-light .cell-select { background-color: rgba(0,0,0,.03); }
   .rooms { grid-template-columns: 1fr; }
   .search input { width: 130px; }
   .section-title { font-size: 19px; }
+  /* topbar sempit: sembunyikan search global (tabel tetap punya search sendiri) + bell dekoratif */
+  .topbar .search, .topbar__bell { display: none; }
+  .funnel-wrap { flex-direction: column; align-items: stretch; }
   .topbar { padding: 0 14px; }
+}
+
+/* ============== TOUCH TARGETS (perangkat sentuh nyata ATAU viewport ≤900px,
+   agar teruji juga lewat resize devtools biasa tanpa emulasi coarse-pointer) === */
+@media (pointer: coarse), (max-width: 900px) {
+  .topbar__icon, .tool-btn { width: 40px; height: 40px; }
+  .side-logout { width: 36px; height: 36px; }
+  .nav-link { padding: 10px 10px; }
+  .chip { padding: 9px 15px; }
+  .cell-select { padding-top: 8px; padding-bottom: 8px; }
+  .cell-btn { padding: 8px 14px; }
+  .pager button { height: 38px; }
+  .col-filter-btn { padding: 5px; }
+  .cbox { width: 18px; height: 18px; }
+  .period-toggle { padding: 11px 10px; }
 }
 
 /* ===================== ACCESSIBILITY: reduced motion =================== */
