@@ -191,6 +191,11 @@ if (CLERK_READY) app.use(clerkMiddleware());
 // Domain Clerk dibuat konfigurabel via CLERK_FRONTEND_API_ORIGIN (default: pola instance
 // gratis *.clerk.accounts.dev). Setelah Clerk App production dgn domain custom, set env
 // tsb ke Frontend API asli (Clerk Dashboard → Domains) agar CSP tidak perlu wildcard.
+// PENTING (Vercel): file statis public/ dilayani CDN Vercel LANGSUNG (tidak lewat
+// Express), jadi header di sini tidak sampai ke HTML/JS/CSS di production — salinan
+// kebijakan yang SAMA ada di vercel.json "headers". Kalau mengubah CSP di sini,
+// WAJIB update vercel.json juga (dan sebaliknya). vercel.json tidak bisa baca env,
+// jadi di sana selalu memakai wildcard *.clerk.accounts.dev.
 const CLERK_FAPI = process.env.CLERK_FRONTEND_API_ORIGIN || "https://*.clerk.accounts.dev";
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
