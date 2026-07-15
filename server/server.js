@@ -22,6 +22,9 @@
    ========================================================================= */
 "use strict";
 
+// Muat .env bila ada (opsional — tidak wajib untuk deploy yang set ENV langsung)
+try { require("dotenv").config(); } catch (_) { /* dotenv opsional */ }
+
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -227,6 +230,8 @@ let sheetsApi = null, spreadsheetId = null, sheetsSource = "snapshot";
 let sheetsCache = { at: 0, data: null };
 const SHEETS_TTL = 5 * 60 * 1000; // cache 5 menit
 (function initSheets() {
+  // Turso aktif -> jangan sentuh Google Sheets sama sekali (dashboard 100% dari Turso).
+  if (process.env.TURSO_DATABASE_URL) { console.log("[sheets] Turso aktif - integrasi Google Sheets dinonaktifkan."); return; }
   try {
     const SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
     // 1) Kredensial service account: dari ENV (Vercel/serverless) ATAU file lokal.
@@ -259,6 +264,15 @@ const SHEETS_TTL = 5 * 60 * 1000; // cache 5 menit
     console.log("[sheets] Google Sheets integration AKTIF (read-only, sumber kredensial: " + sheetsSource + ").");
   } catch (e) { console.warn("[sheets] gagal inisialisasi:", e.message); }
 })();
+
+/* ---- Sumber data Turso (opsional, prioritas di atas Google Sheets) ----
+   Aktif bila ENV TURSO_DATABASE_URL di-set. Modul turso-source menghitung
+   ulang kolom-kolom formula (lihat server/compute.js) agar identik spreadsheet. */
+const tursoSource = require("./turso-source");
+const { SHEET_MAP } = require("./sheet-map");
+if (tursoSource.isConfigured()) {
+  console.log("[turso] sumber data Turso AKTIF — /api/sheets & /api/db memakai Turso (kolom formula dihitung ulang).");
+}
 
 async function readAllSheets() {
   if (sheetsCache.data && Date.now() - sheetsCache.at < SHEETS_TTL) return sheetsCache.data;
@@ -593,25 +607,61 @@ function filterSheetsForRole(sheets, role) {
   return out;
 }
 
-/* ---- GET /api/sheets  → data live dari spreadsheet (read-only, cached, di-RLS) ---- */
+/* ---- Filter tabel Turso per role (untuk /api/db), reuse aturan SHEET_ACCESS
+   dengan menguji NAMA TAB dari SHEET_MAP. Owner = semua. ---- */
+function filterTablesForRole(tables, role) {
+  if (role === "owner") return tables;
+  const allow = SHEET_ACCESS[role] || [];
+  const out = {};
+  for (const [table, rows] of Object.entries(tables)) {
+    const title = (SHEET_MAP[table] && SHEET_MAP[table].title) || table;
+    if (allow.some((re) => re.test(title))) out[table] = rows;
+  }
+  return out;
+}
+
+
+/* ---- GET /api/sheets  → data live (read-only, cached, di-RLS)
+   Prioritas: Turso (kolom formula dihitung ulang) → Google Sheets → kosong. ---- */
 app.get("/api/sheets", requireAuth, async (req, res) => {
+  // 1) Turso (bila dikonfigurasi)
+  if (tursoSource.isConfigured()) {
+    try {
+      const sheets = await tursoSource.readComputedSheets();
+      return res.json({ configured: true, source: "turso", sheets: filterSheetsForRole(sheets, req.user.role) });
+    } catch (e) {
+      console.warn("[turso] gagal baca, coba fallback Google Sheets:", e.message);
+      if (!sheetsApi) return res.status(502).json({ configured: true, source: "turso", error: "Gagal membaca Turso: " + e.message, sheets: {} });
+    }
+  }
+  // 2) Google Sheets (perilaku lama)
   if (!sheetsApi || !spreadsheetId) return res.json({ configured: false, sheets: {} });
   try {
     const sheets = await readAllSheets();
-    res.json({ configured: true, sheets: filterSheetsForRole(sheets, req.user.role) });
+    res.json({ configured: true, source: "sheets", sheets: filterSheetsForRole(sheets, req.user.role) });
   } catch (e) {
     res.status(502).json({ configured: true, error: "Gagal membaca spreadsheet: " + e.message, sheets: {} });
   }
 });
 
+/* ---- GET /api/db  → data Turso terhitung sebagai JSON per tabel (di-RLS) ---- */
+app.get("/api/db", requireAuth, async (req, res) => {
+  if (!tursoSource.isConfigured()) return res.json({ configured: false, tables: {} });
+  try {
+    const tables = await tursoSource.readComputedTables();
+    res.json({ configured: true, tables: filterTablesForRole(tables, req.user.role) });
+  } catch (e) {
+    res.status(502).json({ configured: true, error: "Gagal membaca Turso: " + e.message, tables: {} });
+  }
+});
+
 /* ---- GET /api/health  → diagnosa konfigurasi (tanpa membocorkan rahasia) ---- */
 app.get("/api/health", async (_req, res) => {
-  // Hanya boolean status — TIDAK membocorkan nama env, jumlah, panjang token, atau pesan error
-  // mentah (mengurangi recon untuk penyerang). Cukup untuk cek "hidup & terkonfigurasi".
   const out = {
     ok: true,
     redisConfigured: USE_REDIS,
     sheetsConfigured: !!sheetsApi,
+    tursoConfigured: tursoSource.isConfigured(),
   };
   if (USE_REDIS) {
     try { await redisGet("ktd:health"); out.redisOk = true; }

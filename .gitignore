@@ -1,10 +1,27 @@
 node_modules/
 
 # Rahasia & kredensial — JANGAN di-commit
+.env
 data/.jwt-secret
 data/users.json
 data/drive-config.json
 data/sheets-config.json
 data/service-account.json
-
+data/formulas-dump.json
+.agent
+.claude
+.codebuddy
+.codex
+.continue
+.cursor
+.gemini
+.github/prompts/
+.kiro
+.opencode
+.qoder
+.roo
+.trae
+.windsurf
+graphify-out
+node_modules
 *.log
