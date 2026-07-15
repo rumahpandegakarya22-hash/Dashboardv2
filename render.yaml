@@ -1,5 +1,5 @@
 # Render Blueprint — deploy gratis (free web service).
-# Akun & 2FA disimpan di Upstash Redis (gratis) agar persisten meski filesystem ephemeral.
+# Akun/auth 100% di Clerk — lihat README bagian "Setup Clerk" untuk cara isi key di bawah.
 services:
   - type: web
     name: kost-tiga-dara
@@ -10,9 +10,11 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: JWT_SECRET
-        generateValue: true          # Render generate otomatis & persisten
-      - key: UPSTASH_REDIS_REST_URL
-        sync: false                  # isi manual dari dashboard Upstash
-      - key: UPSTASH_REDIS_REST_TOKEN
-        sync: false                  # isi manual dari dashboard Upstash
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false                  # isi manual dari Clerk Dashboard → API Keys
+      - key: CLERK_SECRET_KEY
+        sync: false                  # isi manual dari Clerk Dashboard → API Keys
+      - key: CLERK_WEBHOOK_SIGNING_SECRET
+        sync: false                  # isi manual dari Clerk Dashboard → Webhooks
+      - key: TOTP_STEPUP_SECRET
+        generateValue: true          # 2FA kustom (Google Authenticator) — bukan setting Clerk

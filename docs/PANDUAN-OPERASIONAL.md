@@ -1,8 +1,8 @@
 # Panduan Operasional & Maintenance
 ## Dashboard Manajemen Kost Tiga Dara
 
-**Versi dokumen:** 1.0 · **Tanggal:** 21 Juni 2026
-**URL Aplikasi:** https://dashboardv2-lovat.vercel.app
+**Versi dokumen:** 2.0 · **Tanggal:** 8 Juli 2026 (auth kini via Clerk)
+**URL Aplikasi:** https://dashboard-tiga-dara.vercel.app
 
 > Dokumen ini adalah panduan resmi untuk seluruh staff Kost Tiga Dara dalam menggunakan, mengoperasikan, dan merawat Dashboard Manajemen. Bacalah bagian yang sesuai dengan peran (role) Anda.
 
@@ -60,7 +60,7 @@ Setiap akun memiliki **satu peran**. Peran menentukan menu & data yang bisa dili
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  BROWSER STAFF (HP / Laptop)                             │
-│  → buka https://dashboardv2-lovat.vercel.app            │
+│  → buka https://dashboard-tiga-dara.vercel.app            │
 └───────────────┬─────────────────────────────────────────┘
                 │ (internet, HTTPS aman)
 ┌───────────────▼─────────────────────────────────────────┐
@@ -70,9 +70,9 @@ Setiap akun memiliki **satu peran**. Peran menentukan menu & data yang bisa dili
 └───────────────┬───────────────────────┬─────────────────┘
                 │                        │
        ┌────────▼────────┐     ┌─────────▼──────────┐
-       │ Upstash Redis   │     │ Google Spreadsheet │
-       │ (data akun &    │     │ Rumah_Pandega_LIVE │
-       │  keamanan 2FA)  │     │ (data operasional) │
+       │      Clerk      │     │ Google Spreadsheet │
+       │ (akun staff,    │     │ Rumah_Pandega_LIVE │
+       │  password, 2FA) │     │ (data operasional) │
        └─────────────────┘     └────────────────────┘
 ```
 
@@ -80,8 +80,8 @@ Setiap akun memiliki **satu peran**. Peran menentukan menu & data yang bisa dili
 | Komponen | Fungsi |
 |---|---|
 | **Front-end** | Tampilan yang dilihat staff (kartu, grafik, tabel) |
-| **Back-end (server)** | Mengatur login, keamanan, dan menyajikan data |
-| **Upstash Redis** | Menyimpan akun staff & pengaturan 2FA secara aman & permanen |
+| **Back-end (server)** | Menjembatani login ke Clerk, menerapkan hak akses per divisi, dan menyajikan data |
+| **Clerk** | Layanan pihak ketiga yang menyimpan **seluruh akun staff** — password, status 2FA, sesi login, dan proses lupa-password. Server kita **tidak pernah** menyimpan/melihat password siapa pun |
 | **Google Spreadsheet** (`Rumah_Pandega_LIVE_v2`) | Sumber data operasional (penghuni, transaksi, leads, dll.) |
 | **Vercel** | Tempat aplikasi "tinggal" & diakses dari internet (gratis) |
 | **GitHub** | Tempat menyimpan kode program (untuk update/perbaikan) |
@@ -91,20 +91,27 @@ Setiap akun memiliki **satu peran**. Peran menentukan menu & data yang bisa dili
 ## 4. Cara Mengakses & Login
 
 ### Login pertama
-1. Buka **https://dashboardv2-lovat.vercel.app** di browser (Chrome/Edge/HP).
+1. Buka **https://dashboard-tiga-dara.vercel.app** di browser (Chrome/Edge/HP).
 2. Masukkan **Username** dan **Password** yang diberikan Owner.
 3. Klik **Masuk**.
 4. Jika 2FA aktif di akun Anda, akan diminta **kode OTP 6 digit** dari aplikasi authenticator → masukkan → **Verifikasi**.
 
 ### Mendaftar akun baru (staff baru)
 1. Di halaman login klik **"Daftar di sini"**.
-2. Isi Nama Lengkap, Username (min. 3 karakter), Password (min. 8 karakter) → **Daftar**.
-3. Akun berstatus **menunggu persetujuan**. **Owner harus menyetujui** dan menetapkan peran sebelum bisa login.
+2. Isi Nama Lengkap, Username (min. 3 karakter), Email, Password (min. 8 karakter) → **Daftar**.
+3. Sebuah **kode 6 digit** dikirim ke email yang diisi → masukkan kode itu di layar berikutnya → **Verifikasi & Daftar**.
+4. Akun berstatus **menunggu persetujuan** (belum bisa login). **Owner harus menyetujui** dan menetapkan peran lewat **Kelola Akun** (lihat [Bagian 9](#9-keamanan--manajemen-akun)) sebelum staff tsb bisa login.
+
+### Lupa password
+1. Di halaman login klik **"Lupa password?"**.
+2. Masukkan **Username** Anda → **Kirim OTP**.
+3. Buka email terdaftar pada akun tsb, salin kode 6 digit yang dikirim.
+4. Masukkan kode + **password baru** → **Simpan Password**. Anda akan otomatis masuk ke dashboard.
 
 ### Keluar (logout)
 Klik ikon **keluar** (panah) di pojok kiri bawah sidebar.
 
-> **Keamanan:** sesi login otomatis berakhir setelah 8 jam. Jangan bagikan password. Gunakan 2FA.
+> **Keamanan:** password & sesi login dikelola penuh oleh Clerk (bukan server kita). Jangan bagikan password. Gunakan 2FA.
 
 ---
 
@@ -264,8 +271,16 @@ Semua diakses lewat tombol **gembok (Akun & Keamanan)** di sidebar.
 |---|---|---|
 | **GitHub** | Penyimpanan kode | https://github.com/rumahpandegakarya22-hash/Dashboardv2 |
 | **Vercel** | Hosting aplikasi | https://vercel.com |
-| **Upstash** | Database akun (Redis) | https://console.upstash.com |
+| **Clerk** | Database akun staff (password, 2FA, sesi login) | https://dashboard.clerk.com |
 | **Google Cloud** | (opsional) integrasi Sheets/Drive | https://console.cloud.google.com |
+
+### 10.1a Setup akun Owner PERTAMA KALI (sekali saja, teknis)
+Berbeda dari staff biasa (yang cukup daftar → menunggu di-ACC Owner lewat UI), akun **Owner pertama** perlu dibuatkan lewat Clerk Dashboard karena belum ada Owner lain yang bisa meng-ACC:
+1. Daftar seperti staff biasa lewat halaman "Daftar di sini" (isi nama, username, email, password → verifikasi kode email).
+2. Buka **Clerk Dashboard → Users**, klik akun yang baru dibuat.
+3. Tab **Metadata** → isi **Public metadata**: `{ "role": "owner", "status": "active" }`.
+4. Menu **⋯ → Unban user** (akun baru otomatis di-"kunci" sampai di-ACC).
+5. Selesai — login seperti biasa. Owner ini sekarang bisa meng-ACC staff lain langsung dari dashboard tanpa perlu masuk Clerk lagi.
 
 ### 10.2 Cara update aplikasi
 Setiap perubahan kode yang **di-push ke branch `main`** di GitHub akan **otomatis dideploy** ulang oleh Vercel (~1 menit). Tidak perlu langkah manual.
@@ -273,26 +288,27 @@ Setiap perubahan kode yang **di-push ke branch `main`** di GitHub akan **otomati
 ### 10.3 Environment Variables (di Vercel → Settings → Environment Variables)
 | Key | Fungsi | Wajib? |
 |---|---|---|
-| `JWT_SECRET` | Kunci pengaman sesi login | **Wajib** |
-| `UPSTASH_REDIS_REST_URL` | Alamat database akun | **Wajib** |
-| `UPSTASH_REDIS_REST_TOKEN` | Token database akun | **Wajib** |
-| `NODE_ENV` = `production` | Mode produksi (cookie aman) | Disarankan |
-| `OWNER_PASSWORD`, `ADMIN_PASSWORD`, dst. | Password awal akun saat seed | Opsional |
+| `CLERK_PUBLISHABLE_KEY` | Kunci publik Clerk (dari Clerk Dashboard → API Keys) | **Wajib** |
+| `CLERK_SECRET_KEY` | Kunci rahasia Clerk — kelola akun & cek role | **Wajib** |
+| `CLERK_WEBHOOK_SIGNING_SECRET` | Verifikasi webhook Clerk (akun baru → status pending otomatis) | **Wajib** |
+| `TOTP_STEPUP_SECRET` | Tanda tangan cookie 2FA kustom (Google Authenticator) — bukan setting Clerk | **Wajib** |
+| `NODE_ENV` = `production` | Mode produksi | Disarankan |
 
-> Setelah mengubah env, **wajib Redeploy** (Deployments → ⋯ → Redeploy).
+> Setelah mengubah env, **wajib Redeploy** (Deployments → ⋯ → Redeploy). Detail lengkap cara mendapatkan tiap key ada di `README.md` bagian "Setup Clerk".
 
 ### 10.4 Cek kesehatan sistem
-Buka **https://dashboardv2-lovat.vercel.app/api/health**. Yang sehat:
+Buka **https://dashboard-tiga-dara.vercel.app/api/health**. Yang sehat:
 ```
-{ "redisConfigured": true, "redisOk": true, "hasJwtEnv": true, "nodeEnv": "production" }
+{ "ok": true, "clerkConfigured": true, "clerkWebhookConfigured": true }
 ```
-- `redisConfigured: false` → env Upstash belum terbaca → cek & Redeploy.
-- `redisOk: false` → token/URL Upstash salah.
+- `clerkConfigured: false` → env `CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY` belum terbaca → cek & Redeploy.
+- `clerkWebhookConfigured: false` → `CLERK_WEBHOOK_SIGNING_SECRET` belum diisi → akun baru **tidak** otomatis berstatus pending (celah keamanan — segera lengkapi).
 
-### 10.5 Backup & pemulihan akun
-- Akun staff tersimpan di Upstash pada key **`ktd:users`**.
-- **Backup:** di Upstash console, salin nilai key `ktd:users` dan simpan di tempat aman.
-- **Reset semua akun:** hapus key `ktd:users` → buka aplikasi → akun ter-seed ulang (password baru muncul di **log Vercel**, atau ambil dari env `OWNER_PASSWORD`).
+### 10.5 Kelola & pemulihan akun
+- Akun staff **100% tersimpan di Clerk** (bukan di server/database kita) — lihat & kelola langsung di **Clerk Dashboard → Users**, atau lewat menu **Kelola Akun** di dashboard (untuk Owner).
+- **Reset password staff:** arahkan staff ke "Lupa password?" di halaman login (lihat Bagian 4), ATAU Owner bisa reset dari Clerk Dashboard → pilih user → **⋯ → Reset password**.
+- **Hapus akun staff:** Clerk Dashboard → Users → pilih user → **⋯ → Delete**. (Menu "Nonaktifkan" di dashboard kita cukup untuk memblokir login tanpa menghapus data.)
+- Clerk otomatis menyimpan histori & backup akun di sisi mereka — tidak perlu backup manual seperti sistem lama.
 
 ### 10.6 (Opsional) Mengaktifkan data live Google Sheets
 1. Buat **Service Account** di Google Cloud, aktifkan **Google Sheets API**, unduh kunci JSON.
@@ -304,9 +320,9 @@ Buka **https://dashboardv2-lovat.vercel.app/api/health**. Yang sehat:
 Beri service account akses **Editor**, lalu jalankan `npm run setup:sheets` untuk membuat tab `12_VENDOR`, `13_LOGBOOK`, `14_DOKUMEN`, `15_KAMAR` beserta header-nya (aman, hanya menambah).
 
 ### 10.8 Yang TIDAK boleh dilakukan
-- Jangan commit file rahasia ke GitHub (`users.json`, `.jwt-secret`, `service-account.json`, `*-config.json` — sudah otomatis diabaikan).
-- Jangan bagikan `JWT_SECRET` atau token Upstash.
-- Jangan ubah `JWT_SECRET` sembarangan (semua sesi login akan logout).
+- Jangan commit file rahasia ke GitHub (`.env`, `service-account.json`, `*-config.json` — sudah otomatis diabaikan).
+- Jangan bagikan `CLERK_SECRET_KEY` atau `CLERK_WEBHOOK_SIGNING_SECRET` ke siapa pun di luar Owner/teknis.
+- Jangan hapus/ubah **Public metadata** (`role`, `status`) akun di Clerk Dashboard secara sembarangan — itu menentukan hak akses divisi seseorang.
 
 ---
 
@@ -314,13 +330,14 @@ Beri service account akses **Editor**, lalu jalankan `npm run setup:sheets` untu
 
 | Masalah | Penyebab | Solusi |
 |---|---|---|
-| **"Gagal membaca data akun"** saat login | Env Upstash belum terbaca | Cek `/api/health`; pastikan env Upstash terisi & **Redeploy** |
-| **"Username atau password salah"** | Salah ketik / belum disetujui | Cek huruf besar/kecil; pastikan akun sudah disetujui Owner |
-| **"Akun belum disetujui Owner"** | Akun masih pending | Minta Owner menyetujui di **Kelola Akun** |
-| **"Kode OTP salah"** | Jam HP tidak sinkron / kode kedaluwarsa | Pastikan jam HP otomatis; masukkan kode terbaru |
+| **Tombol "Masuk" tidak merespons / error auth** | Env Clerk belum terbaca di server | Cek `/api/health`; pastikan `clerkConfigured: true` & **Redeploy** |
+| **"Username atau password salah"** | Salah ketik | Cek huruf besar/kecil pada username & password |
+| **"Akun belum disetujui Owner"** | Akun masih pending, atau webhook belum aktif | Minta Owner menyetujui di **Kelola Akun**; bila akun baru tidak muncul di sana, cek `clerkWebhookConfigured` di `/api/health` |
+| **"Kode OTP salah"** | Jam HP tidak sinkron / kode kedaluwarsa | Pastikan jam HP otomatis; masukkan kode terbaru dari aplikasi authenticator |
+| **Kode verifikasi email tidak masuk** | Salah folder / typo email | Cek folder Spam; klik "Kirim ulang kode" di layar verifikasi |
 | **Tabel kosong "Tidak ada data pada periode…"** | Filter periode terlalu sempit | Ganti ke **Tahun ini** atau atur Custom |
 | **Situs lambat saat dibuka pertama** | Hosting gratis "tidur" saat idle | Normal; tunggu ~30–60 detik, akan aktif |
-| **Lupa password** | — | Minta Owner menonaktifkan & buat ulang, atau reset via Upstash (Bagian 10.5) |
+| **Lupa password** | — | Klik **"Lupa password?"** di halaman login (lihat Bagian 4) |
 
 ---
 
@@ -331,6 +348,7 @@ Beri service account akses **Editor**, lalu jalankan `npm run setup:sheets` untu
 | **KPI** | Indikator kinerja utama (angka penting) |
 | **Role** | Peran/jabatan yang menentukan hak akses |
 | **2FA / OTP** | Verifikasi tambahan kode 6 digit dari aplikasi authenticator |
+| **Clerk** | Layanan pihak ketiga yang mengelola seluruh akun staff (password, 2FA, sesi login, lupa password) |
 | **Leads** | Calon penyewa yang baru menunjukkan minat |
 | **Prospek** | Calon penyewa yang sedang ditindaklanjuti |
 | **Okupansi** | Persentase kamar yang terisi |

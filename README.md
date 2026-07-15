@@ -1,6 +1,6 @@
 # Kost Tiga Dara — Management Dashboard
 
-Dashboard manajemen kost multi-role (Owner, Admin & Keuangan, Marketing, Operasional, Sales) dengan **auth login berbasis backend**, **registrasi akun**, dan **2FA (TOTP)**.
+Dashboard manajemen kost multi-role (Owner, Admin & Keuangan, Marketing, Operasional, Sales) dengan **auth via [Clerk](https://clerk.com)** — login, registrasi + verifikasi email, dan **lupa password** semuanya ditangani Clerk (server kita **tidak pernah** menyimpan atau melihat password pengguna). **2FA (Google Authenticator/TOTP)** dibangun sendiri sebagai lapisan tambahan di atas sesi Clerk (Clerk membatasi MFA bawaan hanya untuk paket Pro berbayar — lihat bagian Keamanan di bawah).
 
 ## Menjalankan (lokal)
 
@@ -9,39 +9,57 @@ npm install        # sekali saja
 npm start          # jalankan server → http://localhost:5512
 ```
 
-Server (Express) melayani front-end statis dari `public/` sekaligus endpoint auth.
-Saat pertama kali dijalankan, server otomatis membuat:
-- `data/users.json` — 5 akun default (password ter-hash bcrypt)
-- `data/.jwt-secret` — kunci penandatangan JWT (jangan dibagikan)
+Server (Express) melayani front-end statis dari `public/` sekaligus endpoint yang butuh Clerk Secret Key (kelola akun, RLS data). **Wajib** setup Clerk dulu (lihat bawah) sebelum login berfungsi — tanpa `CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY`, halaman login akan tampil tapi tombol "Masuk" tidak akan bekerja.
 
-## Akun bawaan & password (TIDAK ada password di repo)
+## Setup Clerk (WAJIB — sekali saja)
 
-Saat pertama kali dijalankan, server membuat 5 akun: `owner`, `admin`, `marketing`, `operasional`, `sales`. **Password TIDAK di-hardcode di kode.** Untuk tiap akun, password diambil dari:
+1. Daftar gratis di **[clerk.com](https://clerk.com)** → buat **Application** baru.
+2. **Configure → User & Authentication → Email, Phone, Username**:
+   - Aktifkan **Username** (dashboard ini login pakai username, bukan email).
+   - Pastikan **Email address** aktif, dan **Password** aktif sebagai strategi.
+   - **Email address → Verification method** = **"Email verification code"** (BUKAN "Email verification link" — UI kita minta kode 6 digit).
+3. **Configure → API Keys**: salin **Publishable key** (`pk_...`) dan **Secret key** (`sk_...`) → isi ke env `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY`.
+4. **Configure → Webhooks → Add Endpoint**:
+   - URL: `https://<domain-dashboard-anda>/api/webhooks/clerk` (lokal: pakai [ngrok](https://ngrok.com) atau sejenis, atau lewati dulu saat dev — lihat catatan di bawah).
+   - Event: centang **`user.created`**.
+   - Salin **Signing Secret** (`whsec_...`) → isi ke env `CLERK_WEBHOOK_SIGNING_SECRET`.
+5. Isi env `TOTP_STEPUP_SECRET` dengan string acak panjang (lihat `.env.example`) — dipakai untuk menandatangani cookie 2FA kustom kita, **bukan** setting di Clerk Dashboard.
 
-1. **Env `<ROLE>_PASSWORD`** bila ada — mis. `OWNER_PASSWORD`, `ADMIN_PASSWORD`, `MARKETING_PASSWORD`, `OPERASIONAL_PASSWORD`, `SALES_PASSWORD`.
-2. Jika env tidak diisi → password **di-generate acak** dan **dicetak sekali ke log server** (lihat log Vercel/terminal: `[seed] password "owner" ... : xxxx`).
+> **Kenapa webhook wajib:** setiap akun baru yang daftar via Clerk otomatis diberi status **"pending"** + di-ban (tidak bisa login) sampai **Owner** menyetujuinya lewat menu **Akun & Keamanan → Kelola Akun**. Ini persis alur approval yang sudah ada sebelumnya — webhook adalah cara Clerk memberi tahu server kita "ada akun baru" agar status pending itu otomatis terpasang. Tanpa webhook, akun baru akan berstatus kosong (tidak bisa didekati Owner untuk di-approve) — jalankan dulu di lingkungan yang bisa diakses publik (mis. langsung di Vercel) sebelum mengetes alur registrasi.
+>
+> **Kenapa tidak pakai fitur Multi-factor bawaan Clerk:** MFA/TOTP native Clerk kini hanya tersedia di paket **Pro** ($25/bulan). Agar dashboard tetap **$0/bulan**, 2FA diimplementasikan sendiri di server kita (`speakeasy` + secret disimpan di Clerk `privateMetadata`, terenkripsi & hanya bisa dibaca lewat Secret Key) — dari sisi user, alurnya identik: scan QR pakai Google Authenticator, masukkan kode 6 digit.
 
-Cara aman: set `OWNER_PASSWORD` (dll.) di env sebelum boot pertama, **atau** login dengan password acak dari log lalu ganti via menu **Akun & Keamanan → Ganti Password**. Role selain owner juga bisa lewat **registrasi → disetujui owner**.
+## Akun pertama (Owner)
 
-> Ganti password kapan saja lewat tombol gembok di sidebar → **Ganti Password** (endpoint `POST /api/password`).
+Clerk tidak punya konsep "akun bawaan" seperti sistem lama. Untuk akun **Owner pertama**:
+1. Daftar lewat halaman **"Daftar di sini"** di dashboard seperti user biasa (isi nama, username, email, password → verifikasi kode email).
+2. Akun akan berstatus **pending** (belum bisa login, sesuai desain).
+3. Buka **Clerk Dashboard → Users** → klik akun tsb → tab **Metadata** → isi **Public metadata**:
+   ```json
+   { "role": "owner", "status": "active" }
+   ```
+4. Di tab **User → ⋯ → Unban user** (karena webhook men-ban akun pending secara default).
+5. Sekarang bisa login sebagai Owner, dan seterusnya Owner bisa meng-approve akun baru lain langsung dari UI dashboard (menu **Akun & Keamanan**) tanpa perlu masuk ke Clerk Dashboard lagi.
 
 ## Keamanan & alur auth
 
-Tidak ada kredensial yang di-hardcode/di-expose di front-end. Scope role berasal dari token server (bukan dipilih klien).
+Tidak ada kredensial yang di-hardcode/di-expose di front-end/backend kita — Clerk yang menyimpan & menghitung hash password. Scope role berasal dari **Clerk `publicMetadata`** (hanya bisa diubah lewat Backend API pakai Secret Key, tidak bisa dimanipulasi dari browser).
 
-- **Registrasi:** `POST /api/register` → akun dibuat berstatus **pending**, harus disetujui Owner sebelum bisa login.
-- **Login 2 langkah:** `POST /api/login` (verifikasi password) → bila 2FA aktif balas `tfaRequired` + tiket singkat → `POST /api/login/tfa` (verifikasi OTP) → terbitkan sesi.
-- **Sesi:** JWT di cookie **httpOnly** (`ktd_session`, TTL 8 jam), `secure` otomatis saat `NODE_ENV=production`, `sameSite=lax`. `GET /api/me` memulihkan sesi.
-- **2FA (TOTP):** `POST /api/tfa/setup` (QR + secret) → `POST /api/tfa/enable` (verifikasi OTP) → aktif. `POST /api/tfa/disable` untuk mematikan. Kompatibel Google Authenticator / Authy.
-- **Kelola akun (owner):** `GET /api/users`, `POST /api/users/approve {username, role}`, `POST /api/users/disable {username}`. Tersedia di UI lewat tombol gembok pada sidebar.
-- **Rate limiting:** endpoint `/api/login`, `/api/login/tfa`, `/api/register` dibatasi 20 percobaan / 15 menit / IP.
+- **Registrasi:** front-end memanggil Clerk langsung (`clerk.client.signUp`) → verifikasi kode email → akun dibuat, otomatis **pending** via webhook (`POST /api/webhooks/clerk`, tanda tangan diverifikasi via `svix`).
+- **Login:** front-end memanggil Clerk langsung (`clerk.client.signIn`, password) → sesi Clerk terbit. Bila akun mengaktifkan 2FA kustom kita, backend menahan request berikutnya (`totpRequired: true`) sampai kode TOTP diverifikasi lewat `/api/totp/verify`.
+- **Sesi:** dikelola penuh oleh Clerk (cookie sendiri, terisolasi dari domain kita). Backend memverifikasinya lewat `@clerk/express` (`clerkMiddleware` + `getAuth`) di setiap request. **2FA memakai cookie tambahan** (`ktd_2fa`, httpOnly, ditandatangani `TOTP_STEPUP_SECRET`, terikat ke `sessionId` Clerk yang aktif) yang membuktikan sesi Clerk ini sudah lolos verifikasi TOTP — dicek berdampingan dengan sesi Clerk di `requireAuth`.
+- **2FA (TOTP kustom, Google Authenticator):** karena MFA native Clerk hanya ada di paket Pro berbayar, 2FA dibangun sendiri: `POST /api/totp/setup` (backend generate secret via `speakeasy`, simpan di Clerk `privateMetadata` — **tidak pernah** terkirim ke browser selain sekali saat setup) → QR code di-generate **100% di browser** dari URI `otpauth://` (paket `qrcode-generator`, tanpa bundler, tanpa pihak ketiga) → `POST /api/totp/enable` mengonfirmasi kode pertama sebelum 2FA aktif. Login berikutnya lewat `POST /api/totp/verify`, `POST /api/totp/disable` untuk mematikan. Semua endpoint TOTP dibatasi rate limit (`express-rate-limit`). Kompatibel Google Authenticator / Authy (standar TOTP RFC 6238).
+- **Lupa password:** front-end memanggil `clerk.client.signIn.create({ strategy: 'reset_password_email_code' })` → kode ke email terdaftar → verifikasi → set password baru. Respons selalu diarahkan ke layar kode tanpa membocorkan apakah username terdaftar (anti user-enumeration, sama seperti desain sebelumnya).
+- **Kelola akun (owner):** `GET /api/users`, `POST /api/users/approve {username, role}`, `POST /api/users/disable {username}` — backend memanggil **Clerk Backend API** (`clerkClient.users.*`) pakai Secret Key. Approve = set `publicMetadata.role` + `status:"active"` + unban; Disable = set `status:"disabled"` + ban (Clerk menolak sesi baru untuk akun yang di-ban).
+- **RLS data (`/api/sheets`, `/api/db`):** **tidak berubah** — filter per role (`SHEET_ACCESS`) dan penyembunyian kolom PII penghuni tetap 100% di server, memakai `role` dari Clerk `publicMetadata`.
 
 ## Arsitektur
 
 ```
 public/            front-end (index.html, app.js, styles.css)  ← di-serve statis
-server/server.js   Express: auth, registrasi, 2FA, kelola akun, dokumen, data sheets
-data/              users.json + .jwt-secret + config (TIDAK di-serve & TIDAK di-commit)
+                    Clerk SDK dimuat via CDN (window.Clerk) — tanpa bundler.
+server/server.js   Express: clerkMiddleware, webhook, kelola akun, dokumen, data sheets
+                    (tidak ada lagi data/users.json — akun 100% di Clerk)
 ```
 
 ## Data dashboard (Google Spreadsheet — Rumah_Pandega_LIVE_v2)
@@ -79,66 +97,29 @@ Tombol **+** memanggil `POST /api/documents` → membuat Google Sheet/Doc baru d
 3. Salin `data/drive-config.example.json` → `data/drive-config.json`, isi ID folder tiap role.
 4. Restart. Log: `[drive] Google Drive integration AKTIF`.
 
-## Penyimpanan akun: file lokal atau Upstash Redis
+## Penyimpanan akun: 100% di Clerk
 
-Server menyimpan akun (termasuk 2FA) di salah satu dari:
-- **File lokal** `data/users.json` — default untuk jalan di komputer.
-- **Upstash Redis** — aktif bila env `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` diisi. Wajib untuk hosting gratis (filesystem-nya ephemeral) agar akun tidak hilang saat redeploy.
+Akun (termasuk password ter-hash, status 2FA, role, status approval) **seluruhnya disimpan di Clerk** — bukan lagi di file lokal atau Upstash Redis. **Upstash Redis tidak lagi diperlukan** untuk auth (sistem lama memakainya untuk menyimpan `users.json` + OTP sementara; keduanya sudah digantikan Clerk). Filesystem server hanya dipakai untuk config opsional Google Drive/Sheets (`data/drive-config.json`, `data/sheets-config.json`) — keduanya tidak wajib dan tidak menyimpan apa pun terkait akun.
 
-## Deploy GRATIS #1 (Vercel + Upstash Redis) — TANPA kartu kredit ⭐
+## Deploy GRATIS (Vercel) — TANPA kartu kredit ⭐
 
-Pilihan **$0/bulan, tanpa kartu sama sekali**, dan **tanpa batasan desain UI/UX** (front-end custom disajikan apa adanya). Express berjalan sebagai serverless function (`api/index.js`), akun disimpan di Upstash Redis. File `vercel.json` sudah disiapkan.
+Pilihan **$0/bulan, tanpa kartu sama sekali**, dan **tanpa batasan desain UI/UX** (front-end custom disajikan apa adanya). Express berjalan sebagai serverless function (`api/index.js`); akun 100% di Clerk (bukan di Vercel) sehingga aman dari sifat filesystem Vercel yang ephemeral. File `vercel.json` sudah disiapkan.
 
-**1. Upstash Redis (gratis, tanpa kartu):** seperti langkah di bawah — salin `UPSTASH_REDIS_REST_URL` & `UPSTASH_REDIS_REST_TOKEN`.
+1. **Setup Clerk** dulu — ikuti bagian "Setup Clerk" di atas, salin ketiga key-nya.
+2. Daftar di [vercel.com](https://vercel.com) dengan GitHub.
+3. **Add New → Project** → import repo `Dashboardv2` → **Deploy**.
+4. **Settings → Environment Variables** → tambahkan lalu **Redeploy**:
+   - `CLERK_PUBLISHABLE_KEY` = dari Clerk Dashboard → API Keys
+   - `CLERK_SECRET_KEY` = dari Clerk Dashboard → API Keys
+   - `CLERK_WEBHOOK_SIGNING_SECRET` = dari Clerk Dashboard → Webhooks (endpoint `/api/webhooks/clerk`, event `user.created`)
+   - `TOTP_STEPUP_SECRET` = string acak panjang (lihat `.env.example`) — WAJIB, dipakai untuk cookie 2FA kustom kita
+   - `NODE_ENV` = `production`
+5. Dapat URL `https://<proyek>.vercel.app` — pakai URL ini sebagai target webhook Clerk di langkah 4 di atas.
 
-**2. Vercel (gratis, tanpa kartu):**
-   - Daftar di [vercel.com](https://vercel.com) dengan GitHub.
-   - **Add New → Project** → import repo `Dashboardv2` → **Deploy**.
-   - **Settings → Environment Variables** → tambahkan lalu **Redeploy**:
-     - `JWT_SECRET` = string acak panjang **(WAJIB — filesystem Vercel read-only)**
-     - `UPSTASH_REDIS_REST_URL` = dari Upstash
-     - `UPSTASH_REDIS_REST_TOKEN` = dari Upstash
-     - `NODE_ENV` = `production`
-     - `RESEND_API_KEY` = dari [resend.com](https://resend.com) **(WAJIB untuk OTP email: verifikasi pendaftaran & lupa password)**
-     - `MAIL_FROM` = mis. `Kost Tiga Dara <onboarding@resend.dev>` (atari alamat domain terverifikasi di Resend)
-   - Dapat URL `https://<proyek>.vercel.app`.
+> Tanpa `CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY`, halaman login tampil tapi tidak berfungsi. Tanpa `CLERK_WEBHOOK_SIGNING_SECRET`, akun baru tidak otomatis berstatus "pending" (lihat penjelasan webhook di atas). Tanpa `TOTP_STEPUP_SECRET`, cookie 2FA ditandatangani pakai secret acak yang berganti tiap deploy/restart — semua user akan diminta ulang kode 2FA setelahnya.
 
-> Di Vercel, akun **wajib** disimpan di Upstash (FS ephemeral) dan `JWT_SECRET` **wajib** via env. Tanpa keduanya, login tidak persisten.
+## Deploy alternatif (Render / Railway)
 
-### Email OTP (verifikasi pendaftaran + lupa password)
-- Registrasi akun baru kini **wajib email** dan **diverifikasi via OTP** sebelum akun masuk antrean approval Owner.
-- **Lupa password**: di halaman login → "Lupa password?" → masukkan **username + email terdaftar** (harus cocok) → OTP dikirim ke email itu → masukkan OTP + password baru.
-- OTP dikirim via **Resend** (HTTP API). Set `RESEND_API_KEY` + `MAIL_FROM` di env. **Tanpa `RESEND_API_KEY`**, OTP tidak terkirim — di mode dev (lokal) kode OTP dicetak ke **log server** untuk pengujian.
-- OTP disimpan sementara (hash + kedaluwarsa) di Upstash Redis; maksimal 5 percobaan, register OTP 15 menit, reset OTP 10 menit.
-- Akun seed (owner/admin/dll) belum punya email → set lewat env `OWNER_EMAIL`, `ADMIN_EMAIL`, dst (opsional) agar bisa pakai reset OTP. **Tidak ada secret di repo** — semua via env.
+Server ini juga jalan di host Node biasa mana pun (Render, Railway, VPS, dst) — cukup set env `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SIGNING_SECRET`, `TOTP_STEPUP_SECRET`, `NODE_ENV=production`, lalu jalankan `npm start`. Karena akun sudah 100% di Clerk (bukan file/Redis), **tidak ada lagi kebutuhan Volume/disk persisten khusus untuk auth** — filesystem ephemeral aman-aman saja untuk bagian ini.
 
-## Deploy GRATIS #2 (Render + Upstash Redis)
-
-Pilihan **$0/bulan**: Render free menjalankan server Express, Upstash Redis menyimpan akun secara persisten. (Netlify/Vercel tidak cocok — serverless + ephemeral; Railway = trial credit lalu berbayar.)
-
-**1. Upstash Redis (gratis):**
-   - Daftar di [upstash.com](https://upstash.com) → **Create Database** (Redis, pilih region terdekat mis. Singapore).
-   - Di tab **REST API**, salin **`UPSTASH_REDIS_REST_URL`** dan **`UPSTASH_REDIS_REST_TOKEN`**.
-
-**2. Render (gratis):**
-   - Daftar di [render.com](https://render.com) → **New → Web Service** → connect repo GitHub `Dashboardv2`.
-   - Render membaca `render.yaml` (plan free, `node server/server.js`). Atau set manual: Build `npm install`, Start `node server/server.js`.
-   - **Environment** → tambahkan:
-     - `NODE_ENV` = `production`
-     - `JWT_SECRET` = string acak panjang (atau biarkan `render.yaml` generate)
-     - `UPSTASH_REDIS_REST_URL` = (dari Upstash)
-     - `UPSTASH_REDIS_REST_TOKEN` = (dari Upstash)
-   - `PORT` di-set otomatis oleh Render.
-   - Create Web Service → tunggu deploy → dapat URL publik `https://...onrender.com`.
-
-> Catatan free tier Render: layanan "tidur" setelah ~15 menit idle, bangun lagi ~30–60 dtk saat diakses. Akun tetap aman karena tersimpan di Upstash.
-
-**3. (Opsional) data live & Drive:** set env `service-account.json` belum didukung via env — untuk data live di host gratis, paling praktis tetap pakai snapshot bawaan, atau gunakan host dengan disk. Tanpa konfigurasi, dashboard jalan normal dengan snapshot.
-
-## Deploy ke Railway (alternatif berbayar setelah trial)
-
-1. [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway memakai `railway.json` / `Procfile`.
-2. **Variables**: `NODE_ENV=production`, `JWT_SECRET=<acak>`, `DATA_DIR=/data` (+ **Volume** mount di `/data` agar `users.json`/`.jwt-secret` persisten). `PORT` otomatis.
-3. Generate domain di **Networking**.
-
-> File rahasia (`users.json`, `.jwt-secret`, `*-config.json`, `service-account.json`) **di-ignore git** — jangan pernah di-commit. Di produksi, `JWT_SECRET` via env wajib (jangan andalkan file).
+> File rahasia (`.env`, `*-config.json`, `service-account.json`) **di-ignore git** — jangan pernah di-commit. Semua secret (termasuk key Clerk) wajib lewat env, tidak pernah lewat file yang ikut ter-commit.

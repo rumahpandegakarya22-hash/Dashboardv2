@@ -1,24 +1,42 @@
 /* =========================================================================
-   Kost Tiga Dara — Backend Auth Server
-   Express + bcryptjs + JWT (httpOnly cookie). Serves the static front-end
-   from /public and exposes the /api endpoints.
+   Kost Tiga Dara — Backend Server
+   Express + Clerk (password, sesi, verifikasi email, lupa password — semua
+   gratis di Clerk) + 2FA/TOTP KUSTOM (Google Authenticator) buatan sendiri,
+   karena MFA bawaan Clerk hanya tersedia di paket Pro berbayar.
+   Serves the static front-end from /public and exposes the /api endpoints.
 
-   Auth flow (no credentials are ever exposed to the front-end):
-     POST /api/register        → buat akun baru (status: pending, perlu di-ACC)
-     POST /api/login           → verifikasi password; jika 2FA aktif → minta OTP
-     POST /api/login/tfa       → verifikasi OTP (TOTP) → terbitkan sesi
-     POST /api/logout          → hapus sesi
-     GET  /api/me              → pulihkan sesi
-     POST /api/tfa/setup       → buat secret TOTP + QR (data URL)
-     POST /api/tfa/enable      → aktifkan 2FA setelah verifikasi OTP
-     POST /api/tfa/disable     → matikan 2FA (verifikasi OTP)
-     GET  /api/users           → (owner) daftar akun
-     POST /api/users/approve   → (owner) setujui akun + tetapkan role
-     POST /api/users/disable   → (owner) nonaktifkan akun
-     POST /api/documents       → buat Sheet/Doc baru di folder Drive role
-     GET  /api/sheets          → data live dari Google Spreadsheet (read-only)
+   Auth flow:
+     (frontend, langsung ke Clerk via @clerk/clerk-js — lihat public/app.js)
+       - Daftar akun baru (email+password, verifikasi email via kode)
+       - Login (password) — sesi Clerk terbit begitu password benar
+       - Lupa password (kode via email)
+       - Ganti password sendiri
+     (backend, endpoint kita — 2FA kustom, TIDAK lewat Clerk)
+       - Setelah password benar, JIKA user sudah aktifkan 2FA, backend
+         menahan akses (lihat requireAuth) sampai kode TOTP diverifikasi
+         lewat POST /api/totp/verify → baru itu server menerbitkan cookie
+         step-up pendek (ktd_2fa, httpOnly, ditandatangani, terikat ke sesi
+         Clerk yang sedang aktif — BUKAN sesi/JWT pengganti Clerk).
+       - Secret TOTP disimpan di Clerk **privateMetadata** (hanya bisa
+         dibaca/ditulis lewat Backend API pakai Secret Key — tidak pernah
+         terekspos ke browser), dihasilkan & diverifikasi pakai `speakeasy`.
+       GET  /api/config          → publishable key Clerk (aman utk publik)
+       GET  /api/me              → profil akun aktif (role/status dari Clerk)
+       POST /api/totp/setup      → buat secret TOTP baru (QR + kode manual)
+       POST /api/totp/enable     → verifikasi kode → aktifkan 2FA
+       POST /api/totp/disable    → verifikasi kode → matikan 2FA
+       POST /api/totp/verify     → verifikasi kode saat login → cookie step-up
+       GET  /api/users           → (owner) daftar akun, dari Clerk Backend API
+       POST /api/users/approve   → (owner) setujui akun + tetapkan role
+       POST /api/users/disable   → (owner) nonaktifkan akun (Clerk banUser)
+       POST /api/webhooks/clerk  → Clerk mengirim event user.created →
+                                    akun baru otomatis diberi status "pending"
+                                    + di-ban (tak bisa login) sampai di-ACC Owner
+       POST /api/documents       → buat Sheet/Doc baru di folder Drive role
+       GET  /api/sheets          → data live (Turso atau Google Sheets, RLS)
 
-   Credentials live in /data/users.json (bcrypt-hashed, seeded on first run).
+   Role & status approval disimpan di Clerk publicMetadata (role, status),
+   BUKAN di server kita — RLS (SHEET_ACCESS) dan alur approval TIDAK BERUBAH.
    ========================================================================= */
 "use strict";
 
@@ -30,177 +48,40 @@ const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 const cookieParser = require("cookie-parser");
-const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const rateLimit = require("express-rate-limit");
 const speakeasy = require("speakeasy");
-const QRCode = require("qrcode");
+const rateLimit = require("express-rate-limit");
+const { clerkMiddleware, getAuth, clerkClient } = require("@clerk/express");
+const { Webhook } = require("svix");
 
 const ROOT = path.join(__dirname, "..");
 const PUBLIC_DIR = path.join(ROOT, "public");
-// DATA_DIR dapat di-override (mis. Railway Volume mount: DATA_DIR=/data) agar
-// users.json + .jwt-secret persisten antar-deploy.
+// DATA_DIR dipakai untuk config Drive/Sheets opsional (BUKAN untuk akun lagi — akun 100% di Clerk).
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const SECRET_FILE = path.join(DATA_DIR, ".jwt-secret");
 
 const PORT = process.env.PORT || 5512;
 const IS_PROD = process.env.NODE_ENV === "production";
-const COOKIE = "ktd_session";
-const TOKEN_TTL = "8h";
-const COOKIE_MAXAGE = 8 * 60 * 60 * 1000; // 8 jam
-const TFA_TICKET_TTL = "5m"; // jendela untuk memasukkan OTP saat login
 const ROLES = ["owner", "admin", "marketing", "operasional", "sales"];
 const APP_NAME = "Kost Tiga Dara";
 
-/* ---- akun bawaan (hanya untuk seed pertama kali) ----
-   TIDAK ada password hardcoded. Password diambil dari env (mis. OWNER_PASSWORD),
-   atau di-generate ACAK saat seed dan dicetak sekali ke log server. */
-const SEED = [
-  { username: "owner",       role: "owner",       name: "Owner" },
-  { username: "admin",       role: "admin",       name: "Admin & Keuangan" },
-  { username: "marketing",   role: "marketing",   name: "Marketing" },
-  { username: "operasional", role: "operasional", name: "Operasional" },
-  { username: "sales",       role: "sales",       name: "Sales" },
-];
-// password seed: dari env <ROLE>_PASSWORD bila ada; jika tidak, acak (dicetak sekali)
-function seedPassword(role) {
-  const fromEnv = process.env[`${role.toUpperCase()}_PASSWORD`];
-  if (fromEnv) return fromEnv;
-  const gen = crypto.randomBytes(9).toString("base64url");
-  console.log(`[seed] password "${role}" di-generate acak (GANTI segera / set env ${role.toUpperCase()}_PASSWORD): ${gen}`);
-  return gen;
+if (!process.env.CLERK_PUBLISHABLE_KEY || !process.env.CLERK_SECRET_KEY) {
+  console.warn("[clerk] CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY belum di-set — auth tidak akan berfungsi. Lihat README.");
+}
+if (!process.env.CLERK_WEBHOOK_SIGNING_SECRET) {
+  console.warn("[clerk] CLERK_WEBHOOK_SIGNING_SECRET belum di-set — akun baru TIDAK akan otomatis berstatus pending. Wajib untuk alur approval Owner. Lihat README.");
 }
 
-/* ----------------------------------------------------------- bootstrap */
-/* Penyimpanan akun bisa pakai Upstash Redis (gratis, persisten — untuk hosting
-   free seperti Render yang filesystem-nya ephemeral) ATAU file lokal data/users.json.
-   Mode Redis aktif bila env UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN diisi. */
-// Terima beberapa konvensi nama (manual Upstash ATAU integrasi Vercel/KV otomatis)
-const REDIS_URL = (process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_URL || "").replace(/\/$/, "");
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_TOKEN || "";
-const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
-const REDIS_KEY = "ktd:users";
-
-function ensureDir() { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); }
-function seedUsers() {
-  return SEED.map((u) => ({
-    username: u.username, role: u.role, name: u.name,
-    email: process.env[`${u.role.toUpperCase()}_EMAIL`] || null, // utk reset OTP; set via env bila perlu
-    passwordHash: bcrypt.hashSync(seedPassword(u.role), 10),
-    status: "active",              // active | pending | disabled
-    tfaEnabled: false, tfaSecret: null,
-    createdAt: new Date().toISOString(),
-  }));
+/* ---- 2FA/TOTP kustom (Google Authenticator) — lapisan tambahan DI ATAS Clerk.
+   Cookie step-up pendek membuktikan "sesi Clerk ini sudah lolos TOTP", tanpa
+   menggantikan sesi Clerk itu sendiri (Clerk tetap satu-satunya penerbit sesi). */
+const TOTP_COOKIE = "ktd_2fa";
+const TOTP_COOKIE_TTL = "12h"; // selaras dgn masa aktif sesi wajar; Clerk sendiri yg atur TTL sesi login
+function getStepupSecret() {
+  if (process.env.TOTP_STEPUP_SECRET) return process.env.TOTP_STEPUP_SECRET;
+  console.warn("[2fa] TOTP_STEPUP_SECRET belum di-set — memakai secret sementara (reset tiap deploy, semua orang akan diminta ulang kode 2FA). Set env ini di produksi!");
+  return crypto.randomBytes(48).toString("hex");
 }
-// upgrade skema akun lama (sebelum kolom status/2FA ada) tanpa mengubah kredensial
-function applyMigrations(users) {
-  let changed = false;
-  for (const u of users) {
-    if (u.status === undefined) { u.status = "active"; changed = true; }
-    if (u.tfaEnabled === undefined) { u.tfaEnabled = false; changed = true; }
-    if (u.tfaSecret === undefined) { u.tfaSecret = null; changed = true; }
-    if (u.email === undefined) { u.email = null; changed = true; }
-  }
-  return changed;
-}
-
-async function redisGet(key) {
-  const r = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
-  if (!r.ok) throw new Error("Redis GET " + r.status);
-  return (await r.json()).result; // string | null
-}
-async function redisSet(key, value) {
-  const r = await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}`, { method: "POST", headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, body: value });
-  if (!r.ok) throw new Error("Redis SET " + r.status);
-}
-
-// Baca akun dari sumber kebenaran (Redis di serverless, atau file lokal). Tidak
-// memakai cache in-memory agar konsisten di lingkungan serverless (Vercel).
-async function loadUsers() {
-  if (USE_REDIS) {
-    const raw = await redisGet(REDIS_KEY);
-    if (!raw) { const seeded = seedUsers(); await redisSet(REDIS_KEY, JSON.stringify(seeded)); return seeded; }
-    const users = JSON.parse(raw);
-    if (applyMigrations(users)) await redisSet(REDIS_KEY, JSON.stringify(users));
-    return users;
-  }
-  ensureDir();
-  if (!fs.existsSync(USERS_FILE)) { const seeded = seedUsers(); fs.writeFileSync(USERS_FILE, JSON.stringify(seeded, null, 2)); return seeded; }
-  const users = JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
-  if (applyMigrations(users)) fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-  return users;
-}
-async function saveUsers(u) {
-  if (USE_REDIS) { await redisSet(REDIS_KEY, JSON.stringify(u)); }
-  else { ensureDir(); fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2)); }
-}
-
-/* ---- KV singkat berdurasi (OTP & pending registrasi) ----
-   Redis: kirim command sebagai array JSON ke root URL (aman utk nilai apa pun + TTL).
-   Tanpa Redis (dev lokal): simpan di memori proses. */
-const MEM = new Map();
-async function redisCmd(args) {
-  const r = await fetch(REDIS_URL, { method: "POST", headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify(args) });
-  if (!r.ok) throw new Error("Redis " + args[0] + " " + r.status);
-  return (await r.json()).result;
-}
-async function kvPut(key, value, ttlSec) {
-  if (USE_REDIS) return redisCmd(["SET", key, value, "EX", String(ttlSec)]);
-  MEM.set(key, { value, exp: Date.now() + ttlSec * 1000 });
-}
-async function kvGet(key) {
-  if (USE_REDIS) return redisCmd(["GET", key]);
-  const e = MEM.get(key); if (!e) return null; if (e.exp < Date.now()) { MEM.delete(key); return null; } return e.value;
-}
-async function kvDel(key) { if (USE_REDIS) return redisCmd(["DEL", key]); MEM.delete(key); }
-
-/* ---- Email via Resend (HTTP API). Tanpa RESEND_API_KEY → log ke konsol (mode dev). ---- */
-async function sendMail(to, subject, html) {
-  const key = process.env.RESEND_API_KEY;
-  const from = process.env.MAIL_FROM || `${APP_NAME} <onboarding@resend.dev>`;
-  if (!key) { console.log(`\n[mail:DEV] (set RESEND_API_KEY untuk kirim sungguhan)\n  to: ${to}\n  subj: ${subject}\n  ${String(html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}\n`); return { dev: true }; }
-  const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to, subject, html }) });
-  if (!r.ok) throw new Error("Gagal mengirim email (" + r.status + ")");
-  return r.json();
-}
-const genOtp = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-const otpHtml = (kode, ctx) => `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:480px;margin:auto;padding:8px">
-  <h2 style="color:#C92D31;margin:0 0 6px">${APP_NAME}</h2>
-  <p style="margin:0 0 4px">Kode OTP untuk <b>${ctx}</b>:</p>
-  <p style="font-size:32px;font-weight:800;letter-spacing:10px;margin:10px 0;color:#111">${kode}</p>
-  <p style="color:#666;font-size:13px;margin:0">Berlaku 10 menit. Jangan bagikan kode ini. Jika Anda tidak meminta, abaikan email ini.</p>
-</div>`;
-const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
-const normEmail = (e) => String(e || "").trim().toLowerCase();
-const findByEmail = (users, email) => users.find((u) => normEmail(u.email) && normEmail(u.email) === normEmail(email));
-
-function getSecret() {
-  if (process.env.JWT_SECRET) return process.env.JWT_SECRET; // WAJIB di serverless (Vercel) — FS read-only
-  try {
-    ensureDir();
-    if (!fs.existsSync(SECRET_FILE)) {
-      fs.writeFileSync(SECRET_FILE, crypto.randomBytes(48).toString("hex"));
-      console.log("[seed] data/.jwt-secret dibuat.");
-    }
-    return fs.readFileSync(SECRET_FILE, "utf8").trim();
-  } catch (e) {
-    console.warn("[warn] tak bisa menulis .jwt-secret (FS read-only?) — pakai secret sementara. SET env JWT_SECRET!");
-    return crypto.randomBytes(48).toString("hex");
-  }
-}
-const findUser = (users, username) =>
-  users.find((u) => u.username.toLowerCase() === String(username).toLowerCase().trim());
-// data yang aman dikirim ke klien (tanpa hash/secret)
-const publicUser = (u) => ({ username: u.username, role: u.role, name: u.name, status: u.status, tfaEnabled: !!u.tfaEnabled, email: u.email || null });
-
-const SECRET = getSecret();
-if (IS_PROD && !process.env.JWT_SECRET) {
-  console.warn("[warn] NODE_ENV=production tetapi JWT_SECRET belum di-set sebagai env — pakai data/.jwt-secret (akan rotasi jika filesystem ephemeral!). Set JWT_SECRET.");
-}
-if (IS_PROD && !USE_REDIS) {
-  console.warn("[warn] Produksi tanpa Upstash Redis — akun disimpan di file (bisa hilang saat redeploy di host gratis). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN.");
-}
+const STEPUP_SECRET = getStepupSecret();
 
 /* ---- optional Google Drive integration (tambah dokumen per role) ---- */
 const DRIVE_CFG_FILE = path.join(DATA_DIR, "drive-config.json");
@@ -287,14 +168,22 @@ async function readAllSheets() {
 
 /* -------------------------------------------------------------- app */
 const app = express();
-app.set("trust proxy", 1); // di belakang proxy Railway (rate-limit & secure cookie)
+app.set("trust proxy", 1); // di belakang proxy Vercel/Railway (secure cookie, dsb.)
 app.disable("x-powered-by");
-app.use(express.json({ limit: "64kb" })); // batasi ukuran body (anti payload besar)
-app.use(cookieParser());
+// verify: simpan body mentah (Buffer) untuk verifikasi tanda tangan webhook Clerk (svix).
+app.use(express.json({ limit: "64kb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
+app.use(cookieParser()); // hanya utk cookie step-up 2FA kustom (ktd_2fa) — sesi utama tetap milik Clerk
+// Mount HANYA bila key ada — clerkMiddleware() melempar error sinkron (crash 500 di
+// SEMUA request, termasuk file statis) kalau CLERK_PUBLISHABLE_KEY/CLERK_SECRET_KEY
+// kosong. requireAuth() di bawah menangani kasus "belum dikonfigurasi" dgn rapi.
+const CLERK_READY = !!(process.env.CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
+if (CLERK_READY) app.use(clerkMiddleware());
 
 // Security headers + Content-Security-Policy (defense-in-depth terhadap XSS/clickjacking).
-// script-src 'self' memblokir inline-script & URL javascript:; style 'unsafe-inline' + Google Fonts
-// diizinkan karena UI memakai style attribut & font Inter; img data: untuk QR code 2FA.
+// Domain Clerk dibuat konfigurabel via CLERK_FRONTEND_API_ORIGIN (default: pola instance
+// gratis *.clerk.accounts.dev). Setelah Clerk App production dgn domain custom, set env
+// tsb ke Frontend API asli (Clerk Dashboard → Domains) agar CSP tidak perlu wildcard.
+const CLERK_FAPI = process.env.CLERK_FRONTEND_API_ORIGIN || "https://*.clerk.accounts.dev";
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -302,257 +191,212 @@ app.use((_req, res, next) => {
   res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
   res.setHeader("Content-Security-Policy", [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src 'self' https://cdn.jsdelivr.net ${CLERK_FAPI} https://challenges.cloudflare.com`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data:",
-    "connect-src 'self'",
+    "img-src 'self' data: https://img.clerk.com",
+    `connect-src 'self' ${CLERK_FAPI}`,
+    "worker-src 'self' blob:",
+    "frame-src https://challenges.cloudflare.com",
     "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'",
   ].join("; "));
   next();
 });
 
-const cookieOpts = { httpOnly: true, sameSite: "lax", secure: IS_PROD, maxAge: COOKIE_MAXAGE };
-function issueSession(res, user) {
-  const payload = { username: user.username, role: user.role, name: user.name };
-  const token = jwt.sign(payload, SECRET, { expiresIn: TOKEN_TTL });
-  res.cookie(COOKIE, token, cookieOpts);
-  return payload;
+/* ---- cookie step-up 2FA: bukti "sesi Clerk ini sudah lolos verifikasi TOTP".
+   Ditandatangani (JWT) + terikat ke sessionId Clerk spesifik, supaya tidak bisa
+   dipakai ulang di sesi Clerk lain (mis. login ulang tetap wajib TOTP lagi). ---- */
+function issueStepupCookie(res, sessionId) {
+  const token = jwt.sign({ sid: sessionId, purpose: "2fa" }, STEPUP_SECRET, { expiresIn: TOTP_COOKIE_TTL });
+  res.cookie(TOTP_COOKIE, token, { httpOnly: true, sameSite: "lax", secure: IS_PROD, maxAge: 12 * 60 * 60 * 1000 });
+}
+function hasValidStepup(req, sessionId) {
+  const token = req.cookies?.[TOTP_COOKIE];
+  if (!token) return false;
+  try { const claims = jwt.verify(token, STEPUP_SECRET); return claims.purpose === "2fa" && claims.sid === sessionId; }
+  catch { return false; }
 }
 
-function requireAuth(req, res, next) {
-  const token = req.cookies[COOKIE];
-  if (!token) return res.status(401).json({ error: "Belum login" });
-  try { req.user = jwt.verify(token, SECRET); next(); }
-  catch { res.clearCookie(COOKIE); return res.status(401).json({ error: "Sesi berakhir, silakan login lagi" }); }
+/* ---- akses per-request: role & status approval dibaca dari Clerk publicMetadata.
+   status "pending"/"disabled" sekaligus di-ban di Clerk (lihat webhook + /api/users/*)
+   sehingga secara normal tak akan pernah punya sesi valid — cek di sini adalah
+   defense-in-depth, sama seperti arsitektur lama yang selalu cek ulang status.
+   TAMBAHAN: jika akun sudah aktifkan 2FA kustom (privateMetadata.totpEnabled),
+   sesi Clerk yang valid SAJA belum cukup — wajib juga cookie step-up (lihat atas). ---- */
+async function requireAuth(req, res, next) {
+  if (!CLERK_READY) return res.status(503).json({ error: "Auth belum dikonfigurasi di server (CLERK_PUBLISHABLE_KEY/CLERK_SECRET_KEY)" });
+  let userId, sessionId;
+  try { ({ userId, sessionId } = getAuth(req)); } catch { return res.status(503).json({ error: "Auth belum dikonfigurasi di server" }); }
+  if (!userId) return res.status(401).json({ error: "Belum login" });
+  let cu;
+  try { cu = await clerkClient.users.getUser(userId); }
+  catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
+  const role = cu.publicMetadata?.role || null;
+  const status = cu.publicMetadata?.status || "pending";
+  if (cu.banned || status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
+  if (status === "disabled") return res.status(403).json({ error: "Akun dinonaktifkan" });
+  if (!role || !ROLES.includes(role)) return res.status(403).json({ error: "Akun belum memiliki role" });
+  if (cu.privateMetadata?.totpEnabled && !hasValidStepup(req, sessionId)) {
+    return res.status(401).json({ error: "Verifikasi 2FA diperlukan", totpRequired: true });
+  }
+  req.clerkUser = cu;
+  req.user = {
+    id: cu.id,
+    username: cu.username || cu.id,
+    role,
+    name: cu.unsafeMetadata?.name || [cu.firstName, cu.lastName].filter(Boolean).join(" ") || cu.username || "",
+  };
+  next();
 }
 function requireOwner(req, res, next) {
   if (req.user?.role !== "owner") return res.status(403).json({ error: "Hanya Owner yang diizinkan" });
   next();
 }
 
-// rate limit: cegah brute-force pada endpoint sensitif
-const authLimiter = rateLimit({
+/* ---- middleware ringan: hanya butuh sesi Clerk VALID (status approved),
+   TANPA mensyaratkan cookie step-up 2FA — dipakai khusus endpoint TOTP itu
+   sendiri (setup/enable/verify), karena pada titik itu step-up memang belum ada. ---- */
+async function requireClerkSession(req, res, next) {
+  if (!CLERK_READY) return res.status(503).json({ error: "Auth belum dikonfigurasi di server" });
+  let userId, sessionId;
+  try { ({ userId, sessionId } = getAuth(req)); } catch { return res.status(503).json({ error: "Auth belum dikonfigurasi di server" }); }
+  if (!userId) return res.status(401).json({ error: "Belum login" });
+  let cu;
+  try { cu = await clerkClient.users.getUser(userId); }
+  catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
+  const status = cu.publicMetadata?.status || "pending";
+  if (cu.banned || status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
+  if (status === "disabled") return res.status(403).json({ error: "Akun dinonaktifkan" });
+  req.clerkUser = cu; req.clerkUserId = userId; req.clerkSessionId = sessionId;
+  next();
+}
+
+/* ---- konfigurasi publik utk frontend (publishable key AMAN diekspos — bukan rahasia) ---- */
+app.get("/api/config", (_req, res) => {
+  res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
+});
+
+/* ---- profil akun aktif ---- */
+app.get("/api/me", requireAuth, async (req, res) => {
+  res.json({ username: req.user.username, role: req.user.role, name: req.user.name, tfaEnabled: !!req.clerkUser.privateMetadata?.totpEnabled });
+});
+
+/* ----------------------------------------------------------- 2FA/TOTP kustom (Google Authenticator)
+   Secret disimpan di Clerk privateMetadata — hanya bisa dibaca/ditulis Backend API
+   (Secret Key kita), TIDAK PERNAH terkirim ke browser kecuali sekali saat setup awal
+   (utk ditampilkan sbg QR/kode manual, sama seperti sistem TOTP pada umumnya). */
+const totpAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
   message: { error: "Terlalu banyak percobaan. Coba lagi dalam beberapa menit." },
 });
 
-/* ----------------------------------------------------------- REGISTER (step 1: kirim OTP email) */
-app.post("/api/register", authLimiter, async (req, res) => {
-  const { username, password, name, email } = req.body || {};
-  if (!username || !password || !name || !email) return res.status(400).json({ error: "Nama, username, email, dan password wajib diisi" });
-  const uname = String(username).trim(), uname_name = String(name).trim();
-  if (uname.length < 3 || uname.length > 32) return res.status(400).json({ error: "Username 3–32 karakter" });
-  if (!/^[a-zA-Z0-9._-]+$/.test(uname)) return res.status(400).json({ error: "Username hanya boleh huruf, angka, titik, garis bawah, dan strip" });
-  if (uname_name.length < 1 || uname_name.length > 60) return res.status(400).json({ error: "Nama maksimal 60 karakter" });
-  if (!validEmail(email)) return res.status(400).json({ error: "Format email tidak valid" });
-  if (String(password).length < 8 || String(password).length > 200) return res.status(400).json({ error: "Password 8–200 karakter" });
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  if (findUser(users, username)) return res.status(409).json({ error: "Username sudah dipakai" });
-  if (findByEmail(users, email)) return res.status(409).json({ error: "Email sudah terdaftar" });
-  // simpan pending registrasi + OTP (belum membuat akun sampai email terverifikasi)
-  const otp = genOtp();
-  const pending = { username: uname, name: uname_name, email: normEmail(email), passwordHash: bcrypt.hashSync(String(password), 10), otpHash: bcrypt.hashSync(otp, 10), attempts: 0 };
+app.post("/api/totp/setup", requireClerkSession, totpAuthLimiter, async (req, res) => {
+  const secret = speakeasy.generateSecret({ name: `${APP_NAME} (${req.clerkUser.username || req.clerkUserId})`, length: 20 });
   try {
-    await kvPut("ktd:reg:" + uname.toLowerCase(), JSON.stringify(pending), 900); // 15 menit
-    await sendMail(normEmail(email), `${APP_NAME} — Kode verifikasi pendaftaran`, otpHtml(otp, "verifikasi pendaftaran"));
-  } catch (e) { return res.status(502).json({ error: "Gagal mengirim OTP. Coba lagi nanti." }); }
-  res.status(200).json({ ok: true, needVerify: true, username: uname, message: "Kode OTP dikirim ke email Anda. Masukkan untuk menyelesaikan pendaftaran." });
+    await clerkClient.users.updateUserMetadata(req.clerkUserId, { privateMetadata: { totpPendingSecret: secret.base32 } });
+  } catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
+  res.json({ secret: secret.base32, uri: secret.otpauth_url });
 });
 
-/* ----------------------------------------------------------- REGISTER (step 2: verifikasi OTP → buat akun) */
-app.post("/api/register/verify", authLimiter, async (req, res) => {
-  const { username, otp } = req.body || {};
-  if (!username || !otp) return res.status(400).json({ error: "Username dan kode OTP wajib diisi" });
-  const key = "ktd:reg:" + String(username).toLowerCase().trim();
-  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
-  if (!raw) return res.status(410).json({ error: "Kode kedaluwarsa. Silakan daftar ulang." });
-  const p = JSON.parse(raw);
-  if (p.attempts >= 5) { await kvDel(key); return res.status(429).json({ error: "Terlalu banyak percobaan. Daftar ulang." }); }
-  if (!bcrypt.compareSync(String(otp).trim(), p.otpHash)) { p.attempts++; await kvPut(key, JSON.stringify(p), 900); return res.status(401).json({ error: "Kode OTP salah" }); }
-  let users; try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  if (findUser(users, p.username)) { await kvDel(key); return res.status(409).json({ error: "Username sudah dipakai" }); }
-  users.push({ username: p.username, name: p.name, email: p.email, role: null, passwordHash: p.passwordHash, status: "pending", tfaEnabled: false, tfaSecret: null, createdAt: new Date().toISOString() });
-  try { await saveUsers(users); await kvDel(key); } catch { return res.status(500).json({ error: "Gagal menyimpan akun" }); }
-  res.status(201).json({ ok: true, message: "Email terverifikasi. Akun dibuat — menunggu persetujuan Owner sebelum bisa login." });
-});
-
-/* ----------------------------------------------------------- REGISTER (kirim ulang OTP) */
-app.post("/api/register/resend", authLimiter, async (req, res) => {
-  const { username } = req.body || {};
-  const key = "ktd:reg:" + String(username || "").toLowerCase().trim();
-  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
-  if (!raw) return res.status(410).json({ error: "Sesi pendaftaran kedaluwarsa. Daftar ulang." });
-  const p = JSON.parse(raw); const otp = genOtp(); p.otpHash = bcrypt.hashSync(otp, 10); p.attempts = 0;
-  try { await kvPut(key, JSON.stringify(p), 900); await sendMail(p.email, `${APP_NAME} — Kode verifikasi pendaftaran`, otpHtml(otp, "verifikasi pendaftaran")); }
-  catch { return res.status(502).json({ error: "Gagal mengirim OTP" }); }
-  res.json({ ok: true, message: "OTP baru dikirim." });
-});
-
-/* ----------------------------------------------------------- LUPA PASSWORD (step 1: kirim OTP) */
-app.post("/api/forgot", authLimiter, async (req, res) => {
-  const { username, email } = req.body || {};
-  // Respons SELALU generik (jangan bocorkan apakah akun/email ada)
-  const generic = { ok: true, message: "Jika username & email cocok, kode OTP telah dikirim ke email tersebut." };
-  if (!username || !email) return res.status(400).json({ error: "Username dan email wajib diisi" });
-  try {
-    const users = await loadUsers();
-    const user = findUser(users, username);
-    if (user && user.status !== "disabled" && normEmail(user.email) && normEmail(user.email) === normEmail(email)) {
-      const otp = genOtp();
-      await kvPut("ktd:reset:" + user.username.toLowerCase(), JSON.stringify({ email: normEmail(user.email), otpHash: bcrypt.hashSync(otp, 10), attempts: 0 }), 600); // 10 menit
-      await sendMail(normEmail(user.email), `${APP_NAME} — Kode reset password`, otpHtml(otp, "reset password"));
-    }
-  } catch { /* tetap balas generik */ }
-  res.json(generic);
-});
-
-/* ----------------------------------------------------------- LUPA PASSWORD (step 2: verifikasi OTP → set password) */
-app.post("/api/reset", authLimiter, async (req, res) => {
-  const { username, email, otp, newPassword } = req.body || {};
-  if (!username || !email || !otp || !newPassword) return res.status(400).json({ error: "Username, email, OTP, dan password baru wajib diisi" });
-  if (String(newPassword).length < 8 || String(newPassword).length > 200) return res.status(400).json({ error: "Password baru 8–200 karakter" });
-  const key = "ktd:reset:" + String(username).toLowerCase().trim();
-  let raw; try { raw = await kvGet(key); } catch { return res.status(500).json({ error: "Gagal memproses" }); }
-  if (!raw) return res.status(410).json({ error: "Kode kedaluwarsa atau tidak ditemukan. Minta OTP lagi." });
-  const r = JSON.parse(raw);
-  if (r.attempts >= 5) { await kvDel(key); return res.status(429).json({ error: "Terlalu banyak percobaan. Minta OTP lagi." }); }
-  if (normEmail(email) !== r.email || !bcrypt.compareSync(String(otp).trim(), r.otpHash)) { r.attempts++; await kvPut(key, JSON.stringify(r), 600); return res.status(401).json({ error: "Email atau kode OTP salah" }); }
-  let users; try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, username);
-  if (!user || normEmail(user.email) !== r.email) { await kvDel(key); return res.status(400).json({ error: "Akun tidak cocok" }); }
-  user.passwordHash = bcrypt.hashSync(String(newPassword), 10);
-  try { await saveUsers(users); await kvDel(key); } catch { return res.status(500).json({ error: "Gagal menyimpan" }); }
-  res.json({ ok: true, message: "Password berhasil diubah. Silakan login dengan password baru." });
-});
-
-/* ----------------------------------------------------------- LOGIN (step 1) */
-app.post("/api/login", authLimiter, async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "Username dan password wajib diisi" });
-  let user;
-  try { user = findUser(await loadUsers(), username); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
-    return res.status(401).json({ error: "Username atau password salah" });
-  }
-  if (user.status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
-  if (user.status === "disabled") return res.status(403).json({ error: "Akun dinonaktifkan" });
-
-  if (user.tfaEnabled) {
-    // jangan terbitkan sesi dulu — kirim tiket singkat untuk langkah OTP
-    const ticket = jwt.sign({ username: user.username, purpose: "tfa" }, SECRET, { expiresIn: TFA_TICKET_TTL });
-    return res.json({ tfaRequired: true, ticket });
-  }
-  res.json(issueSession(res, user));
-});
-
-/* ----------------------------------------------------------- LOGIN (step 2: OTP) */
-app.post("/api/login/tfa", authLimiter, async (req, res) => {
-  const { ticket, token } = req.body || {};
-  if (!ticket || !token) return res.status(400).json({ error: "Tiket dan kode OTP wajib diisi" });
-  let claims;
-  try { claims = jwt.verify(ticket, SECRET); } catch { return res.status(401).json({ error: "Sesi OTP kedaluwarsa, login ulang" }); }
-  if (claims.purpose !== "tfa") return res.status(400).json({ error: "Tiket tidak valid" });
-  const user = findUser(await loadUsers(), claims.username);
-  if (!user || !user.tfaEnabled) return res.status(400).json({ error: "2FA tidak aktif untuk akun ini" });
-  const ok = speakeasy.totp.verify({ secret: user.tfaSecret, encoding: "base32", token: String(token).trim(), window: 1 });
+app.post("/api/totp/enable", requireClerkSession, totpAuthLimiter, async (req, res) => {
+  const { code } = req.body || {};
+  const pending = req.clerkUser.privateMetadata?.totpPendingSecret;
+  if (!pending) return res.status(400).json({ error: "Mulai setup 2FA terlebih dahulu" });
+  const ok = speakeasy.totp.verify({ secret: pending, encoding: "base32", token: String(code || "").trim(), window: 1 });
   if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
-  res.json(issueSession(res, user));
-});
-
-/* ----------------------------------------------------------- LOGOUT / ME */
-app.post("/api/logout", (_req, res) => { res.clearCookie(COOKIE); res.json({ ok: true }); });
-app.get("/api/me", requireAuth, async (req, res) => {
-  let u;
-  try { u = findUser(await loadUsers(), req.user.username); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  if (!u || u.status !== "active") { res.clearCookie(COOKIE); return res.status(401).json({ error: "Akun tidak aktif" }); }
-  res.json(publicUser(u));
-});
-
-/* ----------------------------------------------------------- 2FA setup */
-app.post("/api/tfa/setup", requireAuth, async (req, res) => {
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, req.user.username);
-  if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
-  const secret = speakeasy.generateSecret({ name: `${APP_NAME} (${user.username})`, length: 20 });
-  user.tfaPendingSecret = secret.base32; // belum aktif sampai diverifikasi
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   try {
-    const qr = await QRCode.toDataURL(secret.otpauth_url);
-    res.json({ qr, secret: secret.base32 }); // secret base32 untuk entri manual di authenticator
-  } catch {
-    res.json({ qr: null, secret: secret.base32 });
-  }
-});
-app.post("/api/tfa/enable", requireAuth, async (req, res) => {
-  const { token } = req.body || {};
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, req.user.username);
-  if (!user || !user.tfaPendingSecret) return res.status(400).json({ error: "Mulai setup 2FA terlebih dahulu" });
-  const ok = speakeasy.totp.verify({ secret: user.tfaPendingSecret, encoding: "base32", token: String(token || "").trim(), window: 1 });
-  if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
-  user.tfaSecret = user.tfaPendingSecret; user.tfaEnabled = true; delete user.tfaPendingSecret;
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
+    await clerkClient.users.updateUserMetadata(req.clerkUserId, { privateMetadata: { totpSecret: pending, totpEnabled: true, totpPendingSecret: null } });
+    issueStepupCookie(res, req.clerkSessionId); // sudah membuktikan penguasaan TOTP → langsung step-up, tak perlu isi ulang
+  } catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
   res.json({ ok: true, tfaEnabled: true });
 });
-app.post("/api/tfa/disable", requireAuth, async (req, res) => {
-  const { token } = req.body || {};
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, req.user.username);
-  if (!user || !user.tfaEnabled) return res.status(400).json({ error: "2FA belum aktif" });
-  const ok = speakeasy.totp.verify({ secret: user.tfaSecret, encoding: "base32", token: String(token || "").trim(), window: 1 });
+
+app.post("/api/totp/disable", requireAuth, totpAuthLimiter, async (req, res) => {
+  const { code } = req.body || {};
+  const secret = req.clerkUser.privateMetadata?.totpSecret;
+  if (!secret) return res.status(400).json({ error: "2FA belum aktif" });
+  const ok = speakeasy.totp.verify({ secret, encoding: "base32", token: String(code || "").trim(), window: 1 });
   if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
-  user.tfaEnabled = false; user.tfaSecret = null; delete user.tfaPendingSecret;
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
+  try { await clerkClient.users.updateUserMetadata(req.user.id, { privateMetadata: { totpSecret: null, totpEnabled: false, totpPendingSecret: null } }); }
+  catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
+  res.clearCookie(TOTP_COOKIE);
   res.json({ ok: true, tfaEnabled: false });
 });
 
-/* ----------------------------------------------------------- ganti password */
-app.post("/api/password", requireAuth, async (req, res) => {
-  const { oldPassword, newPassword } = req.body || {};
-  if (!oldPassword || !newPassword) return res.status(400).json({ error: "Password lama & baru wajib diisi" });
-  if (String(newPassword).length < 8) return res.status(400).json({ error: "Password baru minimal 8 karakter" });
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, req.user.username);
-  if (!user || !bcrypt.compareSync(String(oldPassword), user.passwordHash)) {
-    return res.status(401).json({ error: "Password lama salah" });
+// Dipanggil setelah login password berhasil (sesi Clerk sudah ada) tapi 2FA belum diverifikasi.
+app.post("/api/totp/verify", requireClerkSession, totpAuthLimiter, async (req, res) => {
+  const { code } = req.body || {};
+  const secret = req.clerkUser.privateMetadata?.totpSecret;
+  if (!secret || !req.clerkUser.privateMetadata?.totpEnabled) return res.status(400).json({ error: "2FA tidak aktif untuk akun ini" });
+  const ok = speakeasy.totp.verify({ secret, encoding: "base32", token: String(code || "").trim(), window: 1 });
+  if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
+  issueStepupCookie(res, req.clerkSessionId);
+  res.json({ ok: true });
+});
+
+/* ---- Webhook Clerk: akun baru (user.created) → status "pending" + di-ban sampai di-ACC Owner.
+   WAJIB diverifikasi via svix (signing secret dari Clerk Dashboard → Webhooks). ---- */
+app.post("/api/webhooks/clerk", async (req, res) => {
+  const secret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
+  if (!secret) return res.status(503).json({ error: "Webhook belum dikonfigurasi" });
+  const svixId = req.headers["svix-id"], svixTimestamp = req.headers["svix-timestamp"], svixSignature = req.headers["svix-signature"];
+  if (!svixId || !svixTimestamp || !svixSignature) return res.status(400).json({ error: "Header webhook tidak lengkap" });
+  let evt;
+  try {
+    const wh = new Webhook(secret);
+    evt = wh.verify(req.rawBody, { "svix-id": svixId, "svix-timestamp": svixTimestamp, "svix-signature": svixSignature });
+  } catch (e) { return res.status(400).json({ error: "Verifikasi webhook gagal: " + e.message }); }
+  if (evt.type === "user.created") {
+    const u = evt.data;
+    try {
+      await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { role: null, status: "pending" } });
+      await clerkClient.users.banUser(u.id); // cegah login sebelum di-ACC Owner
+      console.log(`[clerk] akun baru "${u.username || u.id}" → status pending, menunggu approval Owner.`);
+    } catch (e) { console.warn("[clerk] gagal set metadata awal akun baru:", e.message); }
   }
-  user.passwordHash = bcrypt.hashSync(String(newPassword), 10);
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
   res.json({ ok: true });
 });
 
 /* ----------------------------------------------------------- owner: kelola akun */
 app.get("/api/users", requireAuth, requireOwner, async (_req, res) => {
-  try { res.json((await loadUsers()).map(publicUser)); }
-  catch { res.status(500).json({ error: "Gagal membaca data akun" }); }
+  try {
+    const list = await clerkClient.users.getUserList({ limit: 200, orderBy: "-created_at" });
+    const users = (list.data || []).map((u) => ({
+      username: u.username || u.id,
+      name: u.unsafeMetadata?.name || [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "",
+      role: u.publicMetadata?.role || null,
+      status: u.publicMetadata?.status || (u.banned ? "disabled" : "pending"),
+      tfaEnabled: !!u.totpEnabled,
+      email: (u.emailAddresses && u.emailAddresses[0] && u.emailAddresses[0].emailAddress) || null,
+    }));
+    res.json(users);
+  } catch (e) { res.status(500).json({ error: "Gagal membaca data akun: " + e.message }); }
 });
 app.post("/api/users/approve", requireAuth, requireOwner, async (req, res) => {
   const { username, role } = req.body || {};
   if (!ROLES.includes(role)) return res.status(400).json({ error: "Role tidak valid" });
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, username);
-  if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
-  user.role = role; user.status = "active";
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
-  res.json({ ok: true, user: publicUser(user) });
+  try {
+    const list = await clerkClient.users.getUserList({ username: [String(username || "")] });
+    const u = (list.data || [])[0];
+    if (!u) return res.status(404).json({ error: "Akun tidak ditemukan" });
+    await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { role, status: "active" } });
+    await clerkClient.users.unbanUser(u.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
 });
 app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
   const { username } = req.body || {};
-  let users;
-  try { users = await loadUsers(); } catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
-  const user = findUser(users, username);
-  if (!user) return res.status(404).json({ error: "Akun tidak ditemukan" });
-  if (user.username === req.user.username) return res.status(400).json({ error: "Tidak bisa menonaktifkan akun sendiri" });
-  user.status = "disabled";
-  try { await saveUsers(users); } catch { return res.status(500).json({ error: "Gagal menyimpan data" }); }
-  res.json({ ok: true, user: publicUser(user) });
+  if (String(username || "").toLowerCase() === String(req.user.username).toLowerCase()) {
+    return res.status(400).json({ error: "Tidak bisa menonaktifkan akun sendiri" });
+  }
+  try {
+    const list = await clerkClient.users.getUserList({ username: [String(username || "")] });
+    const u = (list.data || [])[0];
+    if (!u) return res.status(404).json({ error: "Akun tidak ditemukan" });
+    await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { status: "disabled" } });
+    await clerkClient.users.banUser(u.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
 });
 
 /* ---- POST /api/documents  → buat Sheet/Doc baru di folder Drive role ---- */
@@ -657,17 +501,13 @@ app.get("/api/db", requireAuth, async (req, res) => {
 
 /* ---- GET /api/health  → diagnosa konfigurasi (tanpa membocorkan rahasia) ---- */
 app.get("/api/health", async (_req, res) => {
-  const out = {
+  res.json({
     ok: true,
-    redisConfigured: USE_REDIS,
+    clerkConfigured: !!(process.env.CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY),
+    clerkWebhookConfigured: !!process.env.CLERK_WEBHOOK_SIGNING_SECRET,
     sheetsConfigured: !!sheetsApi,
     tursoConfigured: tursoSource.isConfigured(),
-  };
-  if (USE_REDIS) {
-    try { await redisGet("ktd:health"); out.redisOk = true; }
-    catch { out.redisOk = false; }
-  }
-  res.json(out);
+  });
 });
 
 /* ---- static front-end (only /public is exposed) ---- */

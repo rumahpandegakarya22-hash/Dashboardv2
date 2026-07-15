@@ -960,8 +960,21 @@
   /* ----------------------------------------------------- state */
   const PERIODS = ["Hari ini","Minggu ini","Bulan ini","Tahun ini","Custom"];
   let cur = { auth:false, role:"owner", page:"overview", period:"Tahun ini", from:"", to:"", user:null,
-              authView:"login", tfaTicket:null, tfaEnabled:false,
+              authView:"login", tfaEnabled:false,
               theme: localStorage.getItem("ktd-theme") || "dark", sidebar: true };
+  let clerk = null; // instance Clerk (auth) — diinisialisasi di init()
+
+  // Pesan error Clerk yang manusiawi; fallback ke teks default kalau bukan ClerkAPIResponseError.
+  const clerkErr = (err, fallback) => {
+    const first = err && err.errors && err.errors[0];
+    return (first && (first.longMessage || first.message)) || (err && err.message) || fallback;
+  };
+  // QR code 2FA di-generate 100% di browser (secret TOTP TIDAK PERNAH dikirim ke pihak ketiga).
+  const qrDataUrl = (text) => {
+    if (!window.QRCodeGen) return null;
+    const q = window.QRCodeGen(0, "M"); q.addData(text); q.make();
+    return q.createDataURL(5, 8);
+  };
 
   /* ----------------------------------------------------- LOGIN */
   const loginBrand = `<div class="login-brand"><span class="brand__logo">${I.home}</span><div><b>Kost Tiga Dara</b><small>Management Dashboard</small></div></div>`;
@@ -1035,17 +1048,16 @@
       </form></div>`;
   }
 
-  // Lupa password — langkah 1: minta username + email (harus cocok dgn register)
+  // Lupa password — langkah 1: minta username. Kode OTP dikirim ke email yang
+  // sudah terdaftar pada akun tsb (Clerk yang tahu email-nya, tak perlu diulang di sini).
   function forgotScreen(errorMsg) {
     return `<div class="login">
       <form class="login-card" id="forgotForm" autocomplete="on">
         ${loginBrand}
         <h1 class="login-title">Lupa Password</h1>
-        <p class="login-sub">Masukkan username & email terdaftar. Kode OTP dikirim ke email tersebut.</p>
+        <p class="login-sub">Masukkan username Anda. Kode OTP akan dikirim ke email terdaftar pada akun tersebut.</p>
         <div class="login-field"><label for="fuser">Username</label>
           <input class="login-input" id="fuser" name="username" type="text" autocomplete="username" placeholder="Username" required></div>
-        <div class="login-field"><label for="femail">Email Terdaftar</label>
-          <input class="login-input" id="femail" name="email" type="email" autocomplete="email" placeholder="email@contoh.com" required></div>
         <p class="login-error" id="fError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
         <button type="submit" class="login-btn" id="fSubmit">${I.lock} Kirim OTP</button>
         <p class="login-hint"><a href="#" id="fBack">← Kembali ke login</a></p>
@@ -1058,7 +1070,7 @@
       <form class="login-card" id="resetForm" autocomplete="off">
         ${loginBrand}
         <h1 class="login-title">Reset Password</h1>
-        <p class="login-sub">Masukkan kode OTP dari email & password baru Anda.</p>
+        <p class="login-sub">Masukkan kode OTP yang dikirim ke email terdaftar & password baru Anda.</p>
         <div class="login-field"><label for="rsCode">Kode OTP</label>
           <input class="login-input login-otp" id="rsCode" name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" required></div>
         <div class="login-field"><label for="rsPass">Password Baru</label>
@@ -1148,10 +1160,25 @@
     root.querySelector(".content").scrollTo({ top: 0 });
   }
 
-  function enterSession(data) {
-    cur.auth = true; cur.role = data.role; cur.user = data.name; cur.tfaEnabled = !!data.tfaEnabled;
-    cur.authView = "login"; cur.tfaTicket = null;
-    cur.page = ROLES[cur.role].pages[0].id;
+  // Dipanggil setiap kali Clerk session baru aktif (setelah setActive()) ATAU saat
+  // page load bila sesi Clerk sudah ada. Sumber kebenaran role/status TETAP backend kita
+  // (/api/me → Clerk publicMetadata) — sesi Clerk saja TIDAK cukup utk dianggap "login"
+  // (akun pending/disabled ditolak backend; akun ber-2FA aktif WAJIB juga cookie step-up
+  // dari POST /api/totp/verify — lihat requireAuth di server.js).
+  async function restoreSession() {
+    try {
+      const res = await fetch("/api/me");
+      if (res.ok) {
+        const u = await res.json();
+        cur.auth = true; cur.role = u.role; cur.user = u.name; cur.tfaEnabled = !!u.tfaEnabled;
+        cur.authView = "login"; cur.page = ROLES[cur.role].pages[0].id;
+        await loadLiveData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        if (d.totpRequired) { cur.authView = "otp"; render(); return; } // password OK, 2FA kustom belum diverifikasi
+        cur.auth = false; cur.flash = d.error || null;
+      }
+    } catch { cur.auth = false; }
     render();
   }
 
@@ -1159,77 +1186,78 @@
     const goto = (v) => { cur.authView = v; render(); };
     root.querySelector("#toRegister")?.addEventListener("click", (e) => { e.preventDefault(); goto("register"); });
     root.querySelector("#toLogin")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
-    root.querySelector("#otpBack")?.addEventListener("click", (e) => { e.preventDefault(); cur.tfaTicket = null; goto("login"); });
+    root.querySelector("#otpBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#toForgot")?.addEventListener("click", (e) => { e.preventDefault(); goto("forgot"); });
-    root.querySelector("#rvBack")?.addEventListener("click", (e) => { e.preventDefault(); cur.pendingUser = null; goto("login"); });
+    root.querySelector("#rvBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#fBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#rsBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
 
-    // --- LOGIN (step 1) ---
+    // --- LOGIN (password via Clerk). 2FA (kalau aktif) adalah lapisan KUSTOM kita
+    // sendiri di belakang Clerk — restoreSession() yang mendeteksi & mengarahkan ke
+    // layar OTP (backend membalas totpRequired:true bila akun ber-2FA belum step-up). ---
     root.querySelector("#loginForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#loginSubmit"), errEl = root.querySelector("#loginError");
       const username = root.querySelector("#luser").value.trim(), password = root.querySelector("#lpass").value;
       btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/login", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username, password }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Gagal login");
-        if (data.tfaRequired) { cur.tfaTicket = data.ticket; goto("otp"); return; }
-        enterSession(data);
+        const si = await clerk.client.signIn.create({ identifier: username, password, strategy: "password" });
+        if (si.status !== "complete") throw new Error("Login gagal, coba lagi.");
+        await clerk.setActive({ session: si.createdSessionId }); await restoreSession();
       } catch (err) {
-        errEl.textContent = err.message; errEl.hidden = false;
+        errEl.textContent = clerkErr(err, "Username atau password salah"); errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
 
-    // --- LOGIN (step 2: OTP) ---
+    // --- LOGIN (step 2: kode Google Authenticator) — diverifikasi backend KITA, bukan Clerk ---
     root.querySelector("#otpForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#otpSubmit"), errEl = root.querySelector("#otpError");
-      const token = root.querySelector("#otpCode").value.trim();
+      const code = root.querySelector("#otpCode").value.trim();
       btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/login/tfa", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ticket: cur.tfaTicket, token }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Verifikasi gagal");
-        enterSession(data);
+        const r = await fetch("/api/totp/verify", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ code }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Verifikasi gagal");
+        await restoreSession();
       } catch (err) {
         errEl.textContent = err.message; errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
 
-    // --- REGISTER (step 1: kirim OTP ke email) ---
+    // --- REGISTER (step 1: buat sign-up + kirim kode verifikasi email) — Clerk ---
     root.querySelector("#registerForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#regSubmit"), errEl = root.querySelector("#regError"), okEl = root.querySelector("#regOk");
       const name = root.querySelector("#rname").value.trim(), username = root.querySelector("#ruser").value.trim(), email = root.querySelector("#remail").value.trim(), password = root.querySelector("#rpass").value;
       errEl.hidden = true; okEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/register", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, username, email, password }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Gagal mendaftar");
-        cur.pendingUser = data.username || username; goto("regverify"); // lanjut verifikasi OTP
+        await clerk.client.signUp.create({ username, emailAddress: email, password, unsafeMetadata: { name } });
+        await clerk.client.signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+        goto("regverify");
       } catch (err) {
-        errEl.textContent = err.message; errEl.hidden = false;
+        errEl.textContent = clerkErr(err, "Gagal mendaftar"); errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
 
-    // --- REGISTER (step 2: verifikasi OTP email → buat akun) ---
+    // --- REGISTER (step 2: verifikasi kode email → akun dibuat) ---
+    // SENGAJA TIDAK setActive() di sini — akun baru harus menunggu persetujuan Owner
+    // (webhook Clerk otomatis men-set status "pending" + ban sampai di-ACC, lihat server.js).
     root.querySelector("#regVerifyForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#rvSubmit"), errEl = root.querySelector("#rvError");
-      const otp = root.querySelector("#rvCode").value.trim();
+      const code = root.querySelector("#rvCode").value.trim();
       errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/register/verify", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.pendingUser, otp }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Verifikasi gagal");
-        cur.pendingUser = null; cur.flash = data.message || "Akun dibuat. Menunggu persetujuan Owner."; goto("login");
+        const su = await clerk.client.signUp.attemptEmailAddressVerification({ code });
+        if (su.status !== "complete") throw new Error("Verifikasi gagal");
+        cur.flash = "Email terverifikasi. Akun dibuat — menunggu persetujuan Owner sebelum bisa login.";
+        goto("login");
       } catch (err) {
-        errEl.textContent = err.message; errEl.hidden = false;
+        errEl.textContent = clerkErr(err, "Verifikasi gagal"); errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
@@ -1238,43 +1266,38 @@
       const okEl = root.querySelector("#rvOk"), errEl = root.querySelector("#rvError");
       errEl.hidden = true; okEl.hidden = true;
       try {
-        const res = await fetch("/api/register/resend", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.pendingUser }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Gagal mengirim ulang");
-        okEl.textContent = data.message || "OTP baru dikirim."; okEl.hidden = false;
-      } catch (err) { errEl.textContent = err.message; errEl.hidden = false; }
+        await clerk.client.signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+        okEl.textContent = "OTP baru dikirim."; okEl.hidden = false;
+      } catch (err) { errEl.textContent = clerkErr(err, "Gagal mengirim ulang"); errEl.hidden = false; }
     });
 
-    // --- LUPA PASSWORD (step 1: minta OTP) ---
+    // --- LUPA PASSWORD (step 1: minta kode) ---
+    // Respons SELALU membawa ke layar OTP tanpa membocorkan apakah username ada
+    // (sama seperti sebelumnya) — kalau akun tak ada, langkah verifikasi kode nanti yang gagal.
     root.querySelector("#forgotForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const btn = root.querySelector("#fSubmit"), errEl = root.querySelector("#fError");
-      const username = root.querySelector("#fuser").value.trim(), email = root.querySelector("#femail").value.trim();
-      errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
-      try {
-        const res = await fetch("/api/forgot", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username, email }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Gagal");
-        cur.resetUser = username; cur.resetEmail = email; goto("reset"); // selalu lanjut (respons generik)
-      } catch (err) {
-        errEl.textContent = err.message; errEl.hidden = false;
-        btn.disabled = false; btn.classList.remove("is-loading");
-      }
+      const btn = root.querySelector("#fSubmit");
+      const username = root.querySelector("#fuser").value.trim();
+      btn.disabled = true; btn.classList.add("is-loading");
+      try { await clerk.client.signIn.create({ identifier: username, strategy: "reset_password_email_code" }); }
+      catch (_) { /* diam-diam abaikan — jangan bocorkan keberadaan akun */ }
+      goto("reset");
     });
 
-    // --- LUPA PASSWORD (step 2: OTP + password baru) ---
+    // --- LUPA PASSWORD (step 2: kode + password baru) ---
     root.querySelector("#resetForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = root.querySelector("#rsSubmit"), errEl = root.querySelector("#rsError");
-      const otp = root.querySelector("#rsCode").value.trim(), newPassword = root.querySelector("#rsPass").value;
+      const code = root.querySelector("#rsCode").value.trim(), newPassword = root.querySelector("#rsPass").value;
       errEl.hidden = true; btn.disabled = true; btn.classList.add("is-loading");
       try {
-        const res = await fetch("/api/reset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ username: cur.resetUser, email: cur.resetEmail, otp, newPassword }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Gagal reset");
-        cur.resetUser = null; cur.resetEmail = null; cur.flash = data.message || "Password berhasil diubah. Silakan login."; goto("login");
+        const si1 = await clerk.client.signIn.attemptFirstFactor({ strategy: "reset_password_email_code", code });
+        if (si1.status !== "needs_new_password") throw new Error("Kode OTP salah atau kedaluwarsa");
+        const si2 = await si1.resetPassword({ password: newPassword, signOutOfOtherSessions: true });
+        if (si2.status === "complete") { await clerk.setActive({ session: si2.createdSessionId }); await restoreSession(); return; }
+        cur.flash = "Password berhasil diubah. Silakan login."; goto("login");
       } catch (err) {
-        errEl.textContent = err.message; errEl.hidden = false;
+        errEl.textContent = clerkErr(err, "Kode OTP salah atau kedaluwarsa"); errEl.hidden = false;
         btn.disabled = false; btn.classList.remove("is-loading");
       }
     });
@@ -1350,47 +1373,53 @@
 
     async function paint() {
       body.innerHTML = renderTfa() + renderPassword() + (await renderOwnerUsers());
-      // ganti password
+      // ganti password — langsung ke Clerk (server tidak pernah menyentuh password)
       body.querySelector("#pwBtn")?.addEventListener("click", async () => {
         const msg = body.querySelector("#pwMsg");
         const oldPassword = body.querySelector("#pwOld").value, newPassword = body.querySelector("#pwNew").value;
         msg.hidden = true; msg.style.color = "";
-        const r = await fetch("/api/password", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ oldPassword, newPassword }) });
-        const d = await r.json();
-        if (!r.ok) { msg.textContent = d.error || "Gagal"; msg.hidden = false; return; }
-        msg.textContent = "Password berhasil diganti."; msg.style.color = "var(--green)"; msg.hidden = false;
-        body.querySelector("#pwOld").value = ""; body.querySelector("#pwNew").value = "";
+        try {
+          await clerk.user.updatePassword({ currentPassword: oldPassword, newPassword, signOutOfOtherSessions: true });
+          msg.textContent = "Password berhasil diganti."; msg.style.color = "var(--green)"; msg.hidden = false;
+          body.querySelector("#pwOld").value = ""; body.querySelector("#pwNew").value = "";
+        } catch (err) { msg.textContent = clerkErr(err, "Gagal mengganti password"); msg.hidden = false; }
       });
-      // 2FA: setup
+      // 2FA: setup — TOTP kustom (bukan Clerk, MFA Clerk berbayar). Secret disimpan di
+      // Clerk privateMetadata lewat backend kita; QR di-generate di browser dari uri-nya.
       body.querySelector("#tfaSetupBtn")?.addEventListener("click", async (e) => {
         e.target.disabled = true;
         const msg = body.querySelector("#tfaMsg");
         try {
-          const r = await fetch("/api/tfa/setup", { method:"POST" });
-          const d = await r.json();
-          if (!r.ok) throw new Error(d.error || "Gagal memulai 2FA");
+          const r = await fetch("/api/totp/setup", { method:"POST" });
+          const totp = await r.json();
+          if (!r.ok) throw new Error(totp.error || "Gagal memulai 2FA");
+          const qr = totp.uri ? qrDataUrl(totp.uri) : null;
           body.querySelector("#tfaArea").innerHTML =
-            `${d.qr ? `<img class="tfa-qr" src="${d.qr}" alt="QR 2FA" width="168" height="168">` : ""}
-             <p class="sec-secret">Atau masukkan kode ini manual: <code>${d.secret}</code></p>
+            `${qr ? `<img class="tfa-qr" src="${qr}" alt="QR 2FA" width="168" height="168">` : ""}
+             <p class="sec-secret">Atau masukkan kode ini manual: <code>${esc(totp.secret || "")}</code></p>
              <div class="login-field"><label>Masukkan kode OTP dari aplikasi</label><input class="login-input" id="tfaOn" inputmode="numeric" maxlength="6" placeholder="000000"></div>
              <button class="login-btn login-btn--sm" id="tfaEnableBtn">Verifikasi & Aktifkan</button>`;
           body.querySelector("#tfaEnableBtn").addEventListener("click", async () => {
-            const token = body.querySelector("#tfaOn").value.trim();
-            const rr = await fetch("/api/tfa/enable", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ token }) });
-            const dd = await rr.json();
-            if (!rr.ok) { msg.textContent = dd.error || "Gagal"; msg.hidden = false; return; }
-            cur.tfaEnabled = true; paint(); render();
+            try {
+              const rr = await fetch("/api/totp/enable", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ code: body.querySelector("#tfaOn").value.trim() }) });
+              const dd = await rr.json();
+              if (!rr.ok) throw new Error(dd.error || "Kode OTP salah");
+              cur.tfaEnabled = true; paint(); render();
+            } catch (err) { msg.textContent = err.message; msg.hidden = false; }
           });
         } catch (err) { msg.textContent = err.message; msg.hidden = false; e.target.disabled = false; }
       });
       // 2FA: disable
       body.querySelector("#tfaDisableBtn")?.addEventListener("click", async () => {
         const msg = body.querySelector("#tfaMsg");
-        const token = body.querySelector("#tfaOff").value.trim();
-        const r = await fetch("/api/tfa/disable", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ token }) });
-        const d = await r.json();
-        if (!r.ok) { msg.textContent = d.error || "Gagal"; msg.hidden = false; return; }
-        cur.tfaEnabled = false; paint(); render();
+        const code = body.querySelector("#tfaOff").value.trim();
+        if (!code) { msg.textContent = "Masukkan kode OTP dari aplikasi Anda"; msg.hidden = false; return; }
+        try {
+          const r = await fetch("/api/totp/disable", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ code }) });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "Gagal");
+          cur.tfaEnabled = false; paint(); render();
+        } catch (err) { msg.textContent = err.message; msg.hidden = false; }
       });
       // owner approve / disable
       body.querySelectorAll(".sec-approve").forEach(b => b.addEventListener("click", async () => {
@@ -1492,7 +1521,7 @@
 
   function bind(root) {
     root.querySelectorAll("[data-page]").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); cur.page = a.dataset.page; render(); }));
-    root.querySelector("#logoutBtn")?.addEventListener("click", async () => { try { await fetch("/api/logout", { method:"POST" }); } catch {} cur.auth = false; cur.user = null; cur.authView = "login"; render(); });
+    root.querySelector("#logoutBtn")?.addEventListener("click", async () => { try { await clerk.signOut(); } catch {} cur.auth = false; cur.user = null; cur.authView = "login"; render(); });
     root.querySelector("#securityBtn")?.addEventListener("click", openSecurityModal);
 
     // mobile nav + hide sidebar
@@ -1875,13 +1904,20 @@
     return { pendapatanKotor, beban, labaBersih: pendapatanKotor - beban, incomeBy, opexBy, labels, cashSeries, incSeries, expSeries, labaSeries, daily, nBuckets: order.length };
   }
 
-  /* restore session on load */
+  /* muat Clerk + pulihkan sesi (bila ada) saat halaman dibuka */
   async function init() {
     setupChartTooltip();
     try {
-      const res = await fetch("/api/me");
-      if (res.ok) { const u = await res.json(); cur.auth = true; cur.role = u.role; cur.user = u.name; cur.tfaEnabled = !!u.tfaEnabled; cur.page = ROLES[cur.role].pages[0].id; await loadLiveData(); }
-    } catch {}
+      const cfgRes = await fetch("/api/config");
+      const cfg = await cfgRes.json();
+      if (cfg.clerkPublishableKey && window.Clerk) {
+        clerk = new window.Clerk(cfg.clerkPublishableKey);
+        await clerk.load();
+        if (clerk.session) { await restoreSession(); render(); startAutoRefresh(); return; }
+      } else if (!cfg.clerkPublishableKey) {
+        console.warn("[auth] CLERK_PUBLISHABLE_KEY belum di-set di server — login tidak akan berfungsi.");
+      }
+    } catch (e) { console.warn("[auth] Gagal memuat Clerk:", e); }
     render();
     startAutoRefresh();
   }
