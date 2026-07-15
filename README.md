@@ -24,34 +24,45 @@ Server (Express) melayani front-end statis dari `public/` sekaligus endpoint yan
    - Event: centang **`user.created`**.
    - Salin **Signing Secret** (`whsec_...`) → isi ke env `CLERK_WEBHOOK_SIGNING_SECRET`.
 5. Isi env `TOTP_STEPUP_SECRET` dengan string acak panjang (lihat `.env.example`) — dipakai untuk menandatangani cookie 2FA kustom kita, **bukan** setting di Clerk Dashboard.
+6. **Opsional — tombol "Google" / "Apple" di layar login:** **Configure → SSO Connections → Add connection** → pilih **Google** dan/atau **Apple**. Untuk instance development, Clerk sudah menyediakan kredensial shared bawaan (tidak perlu bikin OAuth app sendiri) — tinggal aktifkan. Untuk production, ikuti wizard Clerk (perlu bikin OAuth client di Google/Apple Developer Console). Tombolnya **selalu tampil** di UI kita; kalau provider belum diaktifkan di sini, klik akan gagal dengan pesan error yang jelas, bukan crash.
 
-> **Kenapa webhook wajib:** setiap akun baru yang daftar via Clerk otomatis diberi status **"pending"** + di-ban (tidak bisa login) sampai **Owner** menyetujuinya lewat menu **Akun & Keamanan → Kelola Akun**. Ini persis alur approval yang sudah ada sebelumnya — webhook adalah cara Clerk memberi tahu server kita "ada akun baru" agar status pending itu otomatis terpasang. Tanpa webhook, akun baru akan berstatus kosong (tidak bisa didekati Owner untuk di-approve) — jalankan dulu di lingkungan yang bisa diakses publik (mis. langsung di Vercel) sebelum mengetes alur registrasi.
+> **Kenapa webhook wajib:** setiap akun baru yang daftar via Clerk (termasuk lewat Google/Apple) otomatis diberi status **"pending"** sampai **Owner** menyetujuinya lewat menu **Akun & Keamanan → Kelola Akun**. Ini persis alur approval yang sudah ada sebelumnya — webhook adalah cara Clerk memberi tahu server kita "ada akun baru" agar status pending itu otomatis terpasang. Tanpa webhook, akun baru akan berstatus kosong (tidak bisa didekati Owner untuk di-approve) — jalankan dulu di lingkungan yang bisa diakses publik (mis. langsung di Vercel) sebelum mengetes alur registrasi.
 >
 > **Kenapa tidak pakai fitur Multi-factor bawaan Clerk:** MFA/TOTP native Clerk kini hanya tersedia di paket **Pro** ($25/bulan). Agar dashboard tetap **$0/bulan**, 2FA diimplementasikan sendiri di server kita (`speakeasy` + secret disimpan di Clerk `privateMetadata`, terenkripsi & hanya bisa dibaca lewat Secret Key) — dari sisi user, alurnya identik: scan QR pakai Google Authenticator, masukkan kode 6 digit.
 
 ## Akun pertama (Owner)
 
-Clerk tidak punya konsep "akun bawaan" seperti sistem lama. Untuk akun **Owner pertama**:
-1. Daftar lewat halaman **"Daftar di sini"** di dashboard seperti user biasa (isi nama, username, email, password → verifikasi kode email).
-2. Akun akan berstatus **pending** (belum bisa login, sesuai desain).
-3. Buka **Clerk Dashboard → Users** → klik akun tsb → tab **Metadata** → isi **Public metadata**:
+Clerk tidak punya konsep "akun bawaan" seperti sistem lama. Untuk akun **Owner pertama**, ada dua cara — pakai cara A (paling cepat, sekali jalan lewat terminal):
+
+**Cara A — script (disarankan):**
+1. Daftar lewat halaman **"Daftar di sini"** di dashboard seperti user biasa (isi nama, username, email, password → verifikasi kode email). Akun akan berstatus **pending** (belum bisa login, sesuai desain).
+2. Di terminal server (pastikan `.env` sudah berisi `CLERK_SECRET_KEY`): `npm run bootstrap:owner -- <username>`. Script ini men-set akun tsb menjadi `role: "owner"` + `status: "active"` lewat Clerk Backend API — lihat `server/bootstrap-owner.js`.
+3. Login seperti biasa. Owner ini sekarang bisa meng-approve akun baru lain langsung dari UI dashboard (menu **Akun & Keamanan**) tanpa perlu masuk ke Clerk Dashboard lagi.
+
+**Cara B — manual lewat Clerk Dashboard:**
+1. Sama seperti langkah 1 di atas.
+2. Buka **Clerk Dashboard → Users** → klik akun tsb → tab **Metadata** → isi **Public metadata**:
    ```json
    { "role": "owner", "status": "active" }
    ```
-4. Di tab **User → ⋯ → Unban user** (karena webhook men-ban akun pending secara default).
-5. Sekarang bisa login sebagai Owner, dan seterusnya Owner bisa meng-approve akun baru lain langsung dari UI dashboard (menu **Akun & Keamanan**) tanpa perlu masuk ke Clerk Dashboard lagi.
+3. Login seperti biasa.
+
+> **Catatan:** versi lama dokumen ini menyebut langkah "Unban user" — itu **sudah tidak berlaku**. Server tidak lagi memanggil Clerk `banUser`/`unbanUser` sama sekali (fitur itu ternyata Pro-only di Clerk — lihat bagian Keamanan di bawah), jadi akun baru tidak pernah ter-ban; status pending/active/disabled sepenuhnya ditegakkan oleh server kita sendiri lewat `publicMetadata.status`. Kalau akun Anda terlanjur ter-ban oleh versi server yang lebih lama, jalankan `npm run bootstrap:owner -- <username>` — script itu juga mencoba unban (best-effort; kalaupun gagal, status active sudah cukup untuk login karena gating dilakukan di server kita, bukan Clerk).
 
 ## Keamanan & alur auth
 
 Tidak ada kredensial yang di-hardcode/di-expose di front-end/backend kita — Clerk yang menyimpan & menghitung hash password. Scope role berasal dari **Clerk `publicMetadata`** (hanya bisa diubah lewat Backend API pakai Secret Key, tidak bisa dimanipulasi dari browser).
 
-- **Registrasi:** front-end memanggil Clerk langsung (`clerk.client.signUp`) → verifikasi kode email → akun dibuat, otomatis **pending** via webhook (`POST /api/webhooks/clerk`, tanda tangan diverifikasi via `svix`).
+- **Registrasi:** front-end memanggil Clerk langsung (`clerk.client.signUp`) → verifikasi kode email → akun dibuat, otomatis **pending** via webhook (`POST /api/webhooks/clerk`, tanda tangan diverifikasi via `svix`) — webhook hanya men-set `publicMetadata.status:"pending"`, **tidak** memanggil Clerk `banUser` (fitur itu Pro-only, lihat catatan di bawah).
+- **Login/daftar via Google atau Apple:** tombol di layar login & daftar memanggil `clerk.client.signIn.authenticateWithRedirect({ strategy: 'oauth_google' | 'oauth_apple', ... })` — browser diarahkan ke provider lalu kembali ke `/`, di mana `clerk.handleRedirectCallback()` menyelesaikan flow-nya. Clerk otomatis membuat akun baru kalau belum ada (webhook tetap jalan → status pending seperti biasa). Perlu diaktifkan dulu di Clerk Dashboard → SSO Connections (lihat "Setup Clerk" di atas).
 - **Login:** front-end memanggil Clerk langsung (`clerk.client.signIn`, password) → sesi Clerk terbit. Bila akun mengaktifkan 2FA kustom kita, backend menahan request berikutnya (`totpRequired: true`) sampai kode TOTP diverifikasi lewat `/api/totp/verify`.
 - **Sesi:** dikelola penuh oleh Clerk (cookie sendiri, terisolasi dari domain kita). Backend memverifikasinya lewat `@clerk/express` (`clerkMiddleware` + `getAuth`) di setiap request. **2FA memakai cookie tambahan** (`ktd_2fa`, httpOnly, ditandatangani `TOTP_STEPUP_SECRET`, terikat ke `sessionId` Clerk yang aktif) yang membuktikan sesi Clerk ini sudah lolos verifikasi TOTP — dicek berdampingan dengan sesi Clerk di `requireAuth`.
 - **2FA (TOTP kustom, Google Authenticator):** karena MFA native Clerk hanya ada di paket Pro berbayar, 2FA dibangun sendiri: `POST /api/totp/setup` (backend generate secret via `speakeasy`, simpan di Clerk `privateMetadata` — **tidak pernah** terkirim ke browser selain sekali saat setup) → QR code di-generate **100% di browser** dari URI `otpauth://` (paket `qrcode-generator`, tanpa bundler, tanpa pihak ketiga) → `POST /api/totp/enable` mengonfirmasi kode pertama sebelum 2FA aktif. Login berikutnya lewat `POST /api/totp/verify`, `POST /api/totp/disable` untuk mematikan. Semua endpoint TOTP dibatasi rate limit (`express-rate-limit`). Kompatibel Google Authenticator / Authy (standar TOTP RFC 6238).
 - **Lupa password:** front-end memanggil `clerk.client.signIn.create({ strategy: 'reset_password_email_code' })` → kode ke email terdaftar → verifikasi → set password baru. Respons selalu diarahkan ke layar kode tanpa membocorkan apakah username terdaftar (anti user-enumeration, sama seperti desain sebelumnya).
-- **Kelola akun (owner):** `GET /api/users`, `POST /api/users/approve {username, role}`, `POST /api/users/disable {username}` — backend memanggil **Clerk Backend API** (`clerkClient.users.*`) pakai Secret Key. Approve = set `publicMetadata.role` + `status:"active"` + unban; Disable = set `status:"disabled"` + ban (Clerk menolak sesi baru untuk akun yang di-ban).
+- **Kelola akun (owner):** `GET /api/users`, `POST /api/users/approve {username, role}`, `POST /api/users/disable {username}` — backend memanggil **Clerk Backend API** (`clerkClient.users.*`) pakai Secret Key. Approve = set `publicMetadata.role` + `status:"active"`; Disable = set `status:"disabled"`. Akses pending/disabled ditolak sepenuhnya oleh backend kita sendiri (`requireAuth` membaca `publicMetadata.status`) — **bukan** oleh Clerk ban.
 - **RLS data (`/api/sheets`, `/api/db`):** **tidak berubah** — filter per role (`SHEET_ACCESS`) dan penyembunyian kolom PII penghuni tetap 100% di server, memakai `role` dari Clerk `publicMetadata`.
+
+> **Kenapa tidak pakai `banUser`/`unbanUser` Clerk:** fitur "User bans" Clerk kini **Pro-only** ($25/bulan) — lihat [clerk.com/pricing](https://clerk.com/pricing). Versi lama dashboard ini memanggilnya otomatis lewat webhook, yang di paket Free menyebabkan akun baru ter-ban tanpa bisa di-unban lewat Dashboard (tombol "Unban" juga Pro-gated). Sejak versi ini, server **tidak pernah** memanggil `banUser`/`unbanUser` — status pending/active/disabled sepenuhnya ditegakkan oleh backend kita sendiri, hasil akhirnya identik (akun pending/disabled tidak bisa memakai dashboard) tanpa bergantung fitur berbayar. Kalau akun Anda terlanjur ter-ban oleh versi lama, jalankan `npm run bootstrap:owner -- <username>` (lihat bagian "Akun pertama").
 
 ## Arsitektur
 

@@ -28,15 +28,23 @@
        POST /api/totp/verify     → verifikasi kode saat login → cookie step-up
        GET  /api/users           → (owner) daftar akun, dari Clerk Backend API
        POST /api/users/approve   → (owner) setujui akun + tetapkan role
-       POST /api/users/disable   → (owner) nonaktifkan akun (Clerk banUser)
+       POST /api/users/disable   → (owner) nonaktifkan akun (status "disabled")
        POST /api/webhooks/clerk  → Clerk mengirim event user.created →
                                     akun baru otomatis diberi status "pending"
-                                    + di-ban (tak bisa login) sampai di-ACC Owner
+                                    sampai di-ACC Owner
        POST /api/documents       → buat Sheet/Doc baru di folder Drive role
        GET  /api/sheets          → data live (Turso atau Google Sheets, RLS)
 
    Role & status approval disimpan di Clerk publicMetadata (role, status),
    BUKAN di server kita — RLS (SHEET_ACCESS) dan alur approval TIDAK BERUBAH.
+
+   CATATAN: gating pending/disabled TIDAK memakai Clerk banUser/unbanUser —
+   fitur "User bans" Clerk kini Pro-only (lihat clerk.com/pricing). Sesi Clerk
+   tetap bisa terbit untuk akun pending/disabled; akses ke aplikasi tetap
+   ditolak sepenuhnya di layer kita sendiri (requireAuth/requireClerkSession
+   di bawah membaca publicMetadata.status) — hasil akhirnya sama (akun
+   pending/disabled tidak bisa memakai dashboard), hanya penegakannya pindah
+   dari Clerk ke server kita agar tetap $0/bulan.
    ========================================================================= */
 "use strict";
 
@@ -218,9 +226,9 @@ function hasValidStepup(req, sessionId) {
 }
 
 /* ---- akses per-request: role & status approval dibaca dari Clerk publicMetadata.
-   status "pending"/"disabled" sekaligus di-ban di Clerk (lihat webhook + /api/users/*)
-   sehingga secara normal tak akan pernah punya sesi valid — cek di sini adalah
-   defense-in-depth, sama seperti arsitektur lama yang selalu cek ulang status.
+   Ini SATU-SATUNYA gerbang akses untuk akun pending/disabled (lihat catatan di
+   atas soal Clerk banUser/unbanUser yang kini Pro-only) — bukan lagi
+   defense-in-depth di atas ban Clerk, tapi penegakan utama.
    TAMBAHAN: jika akun sudah aktifkan 2FA kustom (privateMetadata.totpEnabled),
    sesi Clerk yang valid SAJA belum cukup — wajib juga cookie step-up (lihat atas). ---- */
 async function requireAuth(req, res, next) {
@@ -233,7 +241,7 @@ async function requireAuth(req, res, next) {
   catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
   const role = cu.publicMetadata?.role || null;
   const status = cu.publicMetadata?.status || "pending";
-  if (cu.banned || status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
+  if (status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
   if (status === "disabled") return res.status(403).json({ error: "Akun dinonaktifkan" });
   if (!role || !ROLES.includes(role)) return res.status(403).json({ error: "Akun belum memiliki role" });
   if (cu.privateMetadata?.totpEnabled && !hasValidStepup(req, sessionId)) {
@@ -265,7 +273,7 @@ async function requireClerkSession(req, res, next) {
   try { cu = await clerkClient.users.getUser(userId); }
   catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
   const status = cu.publicMetadata?.status || "pending";
-  if (cu.banned || status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
+  if (status === "pending") return res.status(403).json({ error: "Akun belum disetujui Owner" });
   if (status === "disabled") return res.status(403).json({ error: "Akun dinonaktifkan" });
   req.clerkUser = cu; req.clerkUserId = userId; req.clerkSessionId = sessionId;
   next();
@@ -334,8 +342,10 @@ app.post("/api/totp/verify", requireClerkSession, totpAuthLimiter, async (req, r
   res.json({ ok: true });
 });
 
-/* ---- Webhook Clerk: akun baru (user.created) → status "pending" + di-ban sampai di-ACC Owner.
-   WAJIB diverifikasi via svix (signing secret dari Clerk Dashboard → Webhooks). ---- */
+/* ---- Webhook Clerk: akun baru (user.created) → status "pending" sampai di-ACC Owner.
+   WAJIB diverifikasi via svix (signing secret dari Clerk Dashboard → Webhooks).
+   TIDAK memakai clerkClient.users.banUser — fitur itu Pro-only di Clerk;
+   gerbang akses sepenuhnya di publicMetadata.status (lihat requireAuth). ---- */
 app.post("/api/webhooks/clerk", async (req, res) => {
   const secret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
   if (!secret) return res.status(503).json({ error: "Webhook belum dikonfigurasi" });
@@ -350,7 +360,6 @@ app.post("/api/webhooks/clerk", async (req, res) => {
     const u = evt.data;
     try {
       await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { role: null, status: "pending" } });
-      await clerkClient.users.banUser(u.id); // cegah login sebelum di-ACC Owner
       console.log(`[clerk] akun baru "${u.username || u.id}" → status pending, menunggu approval Owner.`);
     } catch (e) { console.warn("[clerk] gagal set metadata awal akun baru:", e.message); }
   }
@@ -365,8 +374,8 @@ app.get("/api/users", requireAuth, requireOwner, async (_req, res) => {
       username: u.username || u.id,
       name: u.unsafeMetadata?.name || [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "",
       role: u.publicMetadata?.role || null,
-      status: u.publicMetadata?.status || (u.banned ? "disabled" : "pending"),
-      tfaEnabled: !!u.totpEnabled,
+      status: u.publicMetadata?.status || "pending",
+      tfaEnabled: !!u.privateMetadata?.totpEnabled,
       email: (u.emailAddresses && u.emailAddresses[0] && u.emailAddresses[0].emailAddress) || null,
     }));
     res.json(users);
@@ -380,7 +389,10 @@ app.post("/api/users/approve", requireAuth, requireOwner, async (req, res) => {
     const u = (list.data || [])[0];
     if (!u) return res.status(404).json({ error: "Akun tidak ditemukan" });
     await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { role, status: "active" } });
-    await clerkClient.users.unbanUser(u.id);
+    // Best-effort: bersihkan ban lama (dari versi sebelumnya sebelum banUser Pro-only
+    // diketahui) kalau memang bisa — akses tidak lagi bergantung pada ini, jadi
+    // kegagalan (mis. Backend API menolak di Free plan) diabaikan dengan sengaja.
+    try { await clerkClient.users.unbanUser(u.id); } catch { /* abaikan — lihat komentar di atas */ }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
 });
@@ -394,7 +406,6 @@ app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
     const u = (list.data || [])[0];
     if (!u) return res.status(404).json({ error: "Akun tidak ditemukan" });
     await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { status: "disabled" } });
-    await clerkClient.users.banUser(u.id);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
 });

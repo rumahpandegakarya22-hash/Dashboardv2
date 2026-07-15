@@ -979,6 +979,17 @@
   /* ----------------------------------------------------- LOGIN */
   const loginBrand = `<div class="login-brand"><span class="brand__logo">${I.home}</span><div><b>Kost Tiga Dara</b><small>Management Dashboard</small></div></div>`;
 
+  // Ikon brand OAuth (Clerk "Continue with Google/Apple" — perlu diaktifkan dulu di
+  // Clerk Dashboard → SSO Connections; tombol tetap tampil, klik akan gagal dengan
+  // pesan jelas kalau provider belum diaktifkan di sana).
+  const GOOGLE_ICON = `<svg viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg>`;
+  const APPLE_ICON = `<svg viewBox="0 0 384 512" fill="currentColor"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg>`;
+  const oauthRow = (idPrefix) => `<div class="login-divider"><span>atau</span></div>
+        <div class="login-oauth">
+          <button type="button" class="login-btn--oauth" id="${idPrefix}Google">${GOOGLE_ICON}Google</button>
+          <button type="button" class="login-btn--oauth" id="${idPrefix}Apple">${APPLE_ICON}Apple</button>
+        </div>`;
+
   function loginScreen(errorMsg, okMsg) {
     return `<div class="login">
       <form class="login-card" id="loginForm" autocomplete="on">
@@ -992,6 +1003,7 @@
         <p class="login-error" id="loginError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
         <p class="login-ok" id="loginOk"${okMsg ? "" : " hidden"}>${okMsg || ""}</p>
         <button type="submit" class="login-btn" id="loginSubmit">${I.lock} Masuk</button>
+        ${oauthRow("login")}
         <p class="login-hint"><a href="#" id="toForgot">Lupa password?</a></p>
         <p class="login-hint">Belum punya akun? <a href="#" id="toRegister">Daftar di sini</a></p>
       </form></div>`;
@@ -1014,6 +1026,7 @@
         <p class="login-error" id="regError"${errorMsg ? "" : " hidden"}>${errorMsg || ""}</p>
         <p class="login-ok" id="regOk"${okMsg ? "" : " hidden"}>${okMsg || ""}</p>
         <button type="submit" class="login-btn" id="regSubmit">${I.lock} Daftar</button>
+        ${oauthRow("reg")}
         <p class="login-hint">Sudah punya akun? <a href="#" id="toLogin">Masuk</a></p>
       </form></div>`;
   }
@@ -1191,6 +1204,25 @@
     root.querySelector("#rvBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#fBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#rsBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
+
+    // --- OAuth (Google/Apple) — Clerk mengurus sign-in ATAU sign-up otomatis
+    // (kalau akun belum ada, dibuat saat itu juga; webhook user.created tetap
+    // jalan seperti biasa → status "pending" menunggu approval Owner). Klik
+    // memindahkan browser ke provider lalu kembali ke halaman ini. ---
+    const startOAuth = async (strategy, btn) => {
+      if (btn) { btn.disabled = true; btn.classList.add("is-loading"); }
+      try {
+        const redirectUrl = window.location.origin + "/";
+        await clerk.client.signIn.authenticateWithRedirect({ strategy, redirectUrl, redirectUrlComplete: redirectUrl });
+      } catch (err) {
+        cur.flash = clerkErr(err, "Provider ini belum diaktifkan di Clerk Dashboard (SSO Connections).");
+        cur.authView = "login"; render();
+      }
+    };
+    root.querySelector("#loginGoogle")?.addEventListener("click", (e) => startOAuth("oauth_google", e.currentTarget));
+    root.querySelector("#loginApple")?.addEventListener("click", (e) => startOAuth("oauth_apple", e.currentTarget));
+    root.querySelector("#regGoogle")?.addEventListener("click", (e) => startOAuth("oauth_google", e.currentTarget));
+    root.querySelector("#regApple")?.addEventListener("click", (e) => startOAuth("oauth_apple", e.currentTarget));
 
     // --- LOGIN (password via Clerk). 2FA (kalau aktif) adalah lapisan KUSTOM kita
     // sendiri di belakang Clerk — restoreSession() yang mendeteksi & mengarahkan ke
@@ -1913,6 +1945,12 @@
       if (cfg.clerkPublishableKey && window.Clerk) {
         clerk = new window.Clerk(cfg.clerkPublishableKey);
         await clerk.load();
+        // Kembali dari redirect OAuth (Google/Apple) — Clerk menandai URL dengan
+        // ?__clerk_status=... Selesaikan flow-nya di sini lalu bersihkan query string.
+        if (new URLSearchParams(window.location.search).has("__clerk_status")) {
+          try { await clerk.handleRedirectCallback(); } catch (e) { console.warn("[auth] Gagal menyelesaikan OAuth callback:", e); }
+          history.replaceState(null, "", window.location.pathname);
+        }
         if (clerk.session) { await restoreSession(); render(); startAutoRefresh(); return; }
       } else if (!cfg.clerkPublishableKey) {
         console.warn("[auth] CLERK_PUBLISHABLE_KEY belum di-set di server — login tidak akan berfungsi.");

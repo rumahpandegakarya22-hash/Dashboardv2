@@ -7,6 +7,7 @@
     "start": "node server/server.js",
     "dev": "node server/server.js",
     "setup:sheets": "node server/setup-sheets.js",
+    "bootstrap:owner": "node server/bootstrap-owner.js",
     "recompute": "node server/recompute-turso.js",
     "recompute:commit": "node server/recompute-turso.js --commit",
     "dump:formulas": "node server/dump-formulas.js"
