@@ -68,7 +68,9 @@ Tidak ada kredensial yang di-hardcode/di-expose di front-end/backend kita — Cl
 
 ```
 public/            front-end (index.html, app.js, styles.css)  ← di-serve statis
-                    Clerk SDK dimuat via CDN (window.Clerk) — tanpa bundler.
+                    Clerk SDK dimuat DINAMIS dari CDN oleh app.js setelah
+                    publishable key didapat dari /api/config (versi di-pin;
+                    clerk.browser.js v6 butuh key saat dieksekusi) — tanpa bundler.
 server/server.js   Express: clerkMiddleware, webhook, kelola akun, dokumen, data sheets
                     (tidak ada lagi data/users.json — akun 100% di Clerk)
 ```

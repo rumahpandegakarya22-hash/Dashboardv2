@@ -1205,6 +1205,16 @@
     root.querySelector("#fBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
     root.querySelector("#rsBack")?.addEventListener("click", (e) => { e.preventDefault(); goto("login"); });
 
+    // Clerk gagal dimuat (biasanya CLERK_PUBLISHABLE_KEY belum di-set di server) —
+    // JANGAN bind tombol yang memanggil clerk.client.* (akan crash dgn "Cannot read
+    // properties of null"). Nonaktifkan tombol & tampilkan pesan yang jelas.
+    if (!clerk) {
+      root.querySelectorAll(".login-card button").forEach((b) => { b.disabled = true; });
+      const errEl = root.querySelector(".login-error");
+      if (errEl) { errEl.textContent = "Autentikasi belum dikonfigurasi di server. Hubungi admin (CLERK_PUBLISHABLE_KEY belum di-set)."; errEl.hidden = false; }
+      return;
+    }
+
     // --- OAuth (Google/Apple) — Clerk mengurus sign-in ATAU sign-up otomatis
     // (kalau akun belum ada, dibuat saat itu juga; webhook user.created tetap
     // jalan seperti biasa → status "pending" menunggu approval Owner). Klik
@@ -1936,14 +1946,32 @@
     return { pendapatanKotor, beban, labaBersih: pendapatanKotor - beban, incomeBy, opexBy, labels, cashSeries, incSeries, expSeries, labaSeries, daily, nBuckets: order.length };
   }
 
+  /* Muat SDK Clerk via CDN — DINAMIS, setelah publishable key diketahui.
+     clerk.browser.js v6 langsung meng-konstruksi window.Clerk (INSTANCE, bukan
+     class!) saat script dieksekusi, membaca key dari atribut data-clerk-publishable-key
+     atau window.__clerk_publishable_key. Di-load statis tanpa key → constructor
+     throw → window.Clerk tidak pernah ada (bug "Cannot read properties of null").
+     Versi DI-PIN persis: URL rentang @6 sering 404 di jsDelivr. */
+  function loadClerkSdk(publishableKey) {
+    return new Promise((resolve, reject) => {
+      window.__clerk_publishable_key = publishableKey;
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6.25.3/dist/clerk.browser.js";
+      s.crossOrigin = "anonymous";
+      s.onload = () => window.Clerk ? resolve(window.Clerk) : reject(new Error("SDK Clerk termuat tapi window.Clerk tidak terdefinisi"));
+      s.onerror = () => reject(new Error("Gagal memuat SDK Clerk dari CDN"));
+      document.head.appendChild(s);
+    });
+  }
+
   /* muat Clerk + pulihkan sesi (bila ada) saat halaman dibuka */
   async function init() {
     setupChartTooltip();
     try {
       const cfgRes = await fetch("/api/config");
       const cfg = await cfgRes.json();
-      if (cfg.clerkPublishableKey && window.Clerk) {
-        clerk = new window.Clerk(cfg.clerkPublishableKey);
+      if (cfg.clerkPublishableKey) {
+        clerk = await loadClerkSdk(cfg.clerkPublishableKey);
         await clerk.load();
         // Kembali dari redirect OAuth (Google/Apple) — Clerk menandai URL dengan
         // ?__clerk_status=... Selesaikan flow-nya di sini lalu bersihkan query string.
@@ -1952,10 +1980,10 @@
           history.replaceState(null, "", window.location.pathname);
         }
         if (clerk.session) { await restoreSession(); render(); startAutoRefresh(); return; }
-      } else if (!cfg.clerkPublishableKey) {
+      } else {
         console.warn("[auth] CLERK_PUBLISHABLE_KEY belum di-set di server — login tidak akan berfungsi.");
       }
-    } catch (e) { console.warn("[auth] Gagal memuat Clerk:", e); }
+    } catch (e) { clerk = null; console.warn("[auth] Gagal memuat Clerk:", e); }
     render();
     startAutoRefresh();
   }
