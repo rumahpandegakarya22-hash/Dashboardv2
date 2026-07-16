@@ -265,7 +265,8 @@
   let PENGHUNI = PENGHUNI_RAW.map(r => ({
     no:r[0], id:r[1], nama:r[2], panggil:r[3], kamar:r[4], jenis:ROOM_TYPE(r[4]),
     asal:r[5], kerja:r[6], instansi:r[7], durasi:r[8], masuk:r[9], tempo:r[10],
-    status:r[11], kontak:r[12], kontakNama:r[13], email:r[14],
+    status:r[11], kontak:r[12], email:r[14],
+    darurat1:r[12], relasi1:"", namaDarurat1:r[13], darurat2:"", relasi2:"", namaDarurat2:"",
     hp:r[12], wa:r[12], // fallback offline (snapshot tak punya No HP Penghuni) — live diisi dari sheet
   }));
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
@@ -572,6 +573,8 @@
           case "open":      return `<td>${openBtn(r.link)}</td>`;
           case "tagihan":   return `<td>${tagihanBtn(r.wa)}</td>`;
           case "kontak":    return `<td>${esc(fmtHP(v))}</td>`;
+          case "darurat1":
+          case "darurat2":  return `<td>${v ? esc(fmtHP(v)) : "—"}</td>`;
           case "wa":        return `<td>${esc(fmtHP(v))}</td>`;
           case "hp":        return `<td>${esc(fmtHP(v))}</td>`;
           case "id":        return `<td class="cell-id">${esc(v ?? "")}</td>`;
@@ -597,11 +600,14 @@
       {key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"asal",label:"Asal Daerah"},{key:"kerja",label:"Pekerjaan"},
       {key:"instansi",label:"Instansi"},{key:"durasi",label:"Durasi (Bln)"},{key:"masuk",label:"Tanggal Masuk"},{key:"tempo",label:"Jatuh Tempo"},
       {key:"kostStatus",label:"Status"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"},
-      {key:"kontak",label:"Kontak Darurat"},{key:"kontakNama",label:"Nama Kontak"},{key:"email",label:"Email"},
+      {key:"darurat1",label:"Nomor Darurat 1"},{key:"relasi1",label:"Relasi 1"},{key:"namaDarurat1",label:"Nama Kontak 1"},
+      {key:"darurat2",label:"Nomor Darurat 2"},{key:"relasi2",label:"Relasi 2"},{key:"namaDarurat2",label:"Nama Kontak 2"},
+      {key:"email",label:"Email"},
     ],
     penghuniSales: [{key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"tempo",label:"Tanggal Jatuh Tempo"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"}],
     pembayaran: [
-      {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"jenisTx",label:"Jenis Transaksi"},
+      {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"idPenghuni",label:"ID Penghuni"},
+      {key:"jenisTx",label:"Jenis Transaksi"},
       {key:"namaTx",label:"Nama Transaksi"},{key:"jumlah",label:"Jumlah"},{key:"keterangan",label:"Keterangan"},
     ],
     dokumen: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"open",label:"Link"}],
@@ -1656,8 +1662,9 @@
         no: col("no"), id: col("id"), nama: col("nama lengkap","nama"), panggil: col("panggil"),
         kamar: col("no kamar","kamar"), jenis: col("jenis"), asal: col("asal"), kerja: col("pekerjaan"),
         instansi: col("instansi"), durasi: col("lama tinggal","durasi"), masuk: col("tgl masuk","masuk"),
-        tempo: col("jatuh tempo","tempo"), status: col("status"), kontak: col("kontak darurat","kontak"),
-        kontakNama: col("nama kontak"), email: col("email"),
+        tempo: col("jatuh tempo","tempo"), status: col("status"), email: col("email"),
+        darurat1: col("nomor darurat 1","kontak darurat"), relasi1: col("relasi 1"), namaDarurat1: col("nama kontak 1","nama kontak"),
+        darurat2: col("nomor darurat 2"), relasi2: col("relasi 2"), namaDarurat2: col("nama kontak 2"),
         sisa: col("sisa hari","sisa"), flag: col("flag tagih","flag"), hp: col("no hp penghuni","no hp","hp penghuni"),
       };
       const get = (r, i, d="") => (i >= 0 && r[i] != null ? r[i] : d);
@@ -1668,9 +1675,11 @@
           no: ci.no >= 0 ? get(r, ci.no, i + 1) : i + 1, id: get(r, ci.id), nama: get(r, ci.nama), panggil: get(r, ci.panggil),
           kamar, jenis: get(r, ci.jenis) || ROOM_TYPE(kamar), asal: get(r, ci.asal), kerja: get(r, ci.kerja),
           instansi: get(r, ci.instansi), durasi: get(r, ci.durasi), masuk: get(r, ci.masuk), tempo: get(r, ci.tempo),
-          status: get(r, ci.status), kontak: get(r, ci.kontak), kontakNama: get(r, ci.kontakNama), email: get(r, ci.email),
+          status: get(r, ci.status), kontak: get(r, ci.darurat1), email: get(r, ci.email),
+          darurat1: get(r, ci.darurat1), relasi1: get(r, ci.relasi1), namaDarurat1: get(r, ci.namaDarurat1),
+          darurat2: get(r, ci.darurat2), relasi2: get(r, ci.relasi2), namaDarurat2: get(r, ci.namaDarurat2),
           sisa: sisaRaw === "" ? null : +sisaRaw, flag: get(r, ci.flag),
-          hp: get(r, ci.hp) || get(r, ci.kontak), wa: get(r, ci.hp) || get(r, ci.kontak), // No HP Penghuni → tombol WA
+          hp: get(r, ci.hp) || get(r, ci.darurat1), wa: get(r, ci.hp) || get(r, ci.darurat1), // No HP Penghuni → tombol WA
         };
       });
       if (data.length) { PENGHUNI = data; recomputeFromPenghuni(); }
@@ -1724,6 +1733,22 @@
       };
       const pad3 = (n) => String(n).padStart(3, "0");
       const num = (s) => { const n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
+
+      // Pembayaran sewa per penghuni (tab PAYMENT dari tabel `payment` Turso).
+      // Punya ID Penghuni asli → prioritas di atas jurnal; jurnal tetap fallback bila kosong.
+      const payKey = Object.keys(sheets).find(k => /payment/i.test(k));
+      const payRows = payKey && sheets[payKey];
+      if (Array.isArray(payRows) && payRows.length >= 2) {
+        const o = objs(payRows, { idP:["id penghuni"], inv:["no invoice"], periode:["periode"], amount:["nominal"], tgl:["tanggal bayar"], metode:["metode"], status:["status"], notes:["catatan"] });
+        const payPill = (s) => /paid|lunas/i.test(s) ? { t:s || "Paid", c:"s-complete" } : { t:s || "Pending", c:"s-pending" };
+        const P = o.filter(x => x.idP || x.inv).map(x => ({
+          check:false, tanggal: x.tgl ? fmtDateID(x.tgl) : "", idPenghuni: x.idP,
+          jenisTx: payPill(x.status), namaTx: x.inv || "Tagihan sewa",
+          jumlah: "Rp" + num(x.amount).toLocaleString("id-ID"),
+          keterangan: [x.periode, x.metode, x.notes].filter(Boolean).join(" · "),
+        }));
+        if (P.length) PEMBAYARAN = P;
+      }
 
       // Leads (Marketing)
       const leadsRows = findTab(h => has(h, "nama leads") && has(h, "status leads"));
@@ -1845,7 +1870,8 @@
       else return; // mutasi neraca murni (mis. kas↔deposit) → bukan pemasukan/pengeluaran
       const namaTx = ket || (jenis === "Pemasukan" ? String(kredit) : String(debit));
       // enrich keterangan: nomor kamar + DP/Pelunasan/Sewa untuk pendapatan sewa
-      let extra = "";
+      // + ID Penghuni (unik) dari penghuni yang cocok → filter per ID di kolom
+      let extra = "", idPenghuni = "";
       if (jenis === "Pemasukan") {
         const p = PENGHUNI.find(p => {
           const toks = [p.panggil, (p.nama || "").split(" ")[0]].filter(Boolean).map(t => String(t).toLowerCase());
@@ -1854,10 +1880,12 @@
         if (p) {
           const tag = /sewa/i.test(ket) ? (p.status === "Booking (DP)" ? "DP" : "Pelunasan") : "";
           extra = "Kamar " + p.kamar + (tag ? " · " + tag : "");
+          idPenghuni = p.id || "";
         }
       }
       out.push({
         tanggal: fmtDateID(tgl), // normalisasi tampilan (serial/dd-mm → "6 Jul 2026")
+        idPenghuni,
         jenisTx: jenis === "Pemasukan" ? { t: "Pemasukan", c: "s-complete" } : { t: "Pengeluaran", c: "s-pending" },
         namaTx, jumlah: "Rp" + nominal.toLocaleString("id-ID"), keterangan: extra,
       });

@@ -16,6 +16,7 @@ const TABLES = [
   "kamar", "booking", "leads", "survey", "coa", "jurnal_transaksi",
   "maintenance_cm", "maintenance_pm", "vendor", "content", "promotion",
   "dokumen", "logbook_divisi", "occupancy_history",
+  "payment", "penghuni",
 ];
 
 let client = null;

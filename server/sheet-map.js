@@ -143,6 +143,18 @@ const SHEET_MAP = {
       c("divisi", "Divisi"), c("deadline", "Deadline"), c("status", "Status"),
     ],
   },
+  // Pembayaran sewa per penghuni (tabel `payment`). Header "ID Penghuni" dipakai
+  // frontend untuk filter per ID unik; judul tab dideteksi via /payment/i.
+  payment: {
+    title: "PAYMENT (Pembayaran Sewa)",
+    columns: [
+      c("id_payment", "ID Payment"), c("id_penghuni", "ID Penghuni"),
+      c("no_invoice", "No Invoice"), c("billing_period", "Periode Tagihan"),
+      c("amount", "Nominal"), c("payment_date", "Tanggal Bayar"),
+      c("payment_method", "Metode"), c("status", "Status Pembayaran"),
+      c("notes", "Catatan"),
+    ],
+  },
   // Header cocok dgn detektor Retention Rate di app.js (loadLiveData):
   // butuh "nama lengkap" + "tanggal masuk" + "tanggal keluar" di header.
   occupancy_history: {
