@@ -2,7 +2,7 @@
   "name": "kost-tiga-dara-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Kost Tiga Dara management dashboard. Auth via Clerk (2FA/TOTP, forgot-password, email verification). Data via Turso or Google Sheets.",
+  "description": "Kost Tiga Dara management dashboard. Auth via Clerk (2FA/TOTP, forgot-password, email verification). Data via Turso.",
   "scripts": {
     "start": "node server/server.js",
     "dev": "node server/server.js",

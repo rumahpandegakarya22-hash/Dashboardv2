@@ -143,6 +143,15 @@ const SHEET_MAP = {
       c("divisi", "Divisi"), c("deadline", "Deadline"), c("status", "Status"),
     ],
   },
+  // Header cocok dgn detektor Retention Rate di app.js (loadLiveData):
+  // butuh "nama lengkap" + "tanggal masuk" + "tanggal keluar" di header.
+  occupancy_history: {
+    title: "HISTORICAL CUSTOMER (Retensi)",
+    columns: [
+      c("nama", "Nama Lengkap"), c("no_kamar", "No Kamar"),
+      c("tanggal_mulai", "Tanggal Masuk"), c("tanggal_selesasi", "Tanggal Keluar"),
+    ],
+  },
 };
 
 module.exports = { SHEET_MAP };
