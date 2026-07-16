@@ -145,11 +145,13 @@ const SHEET_MAP = {
   },
   // Pembayaran sewa per penghuni (tabel `payment`). Header "ID Penghuni" dipakai
   // frontend untuk filter per ID unik; judul tab dideteksi via /payment/i.
+  // Skema payment baru (2026-07-16): id_payment = no invoice, billing_period
+  // dipecah jadi periode_awal/periode_akhir (DP: periode_akhir NULL).
   payment: {
     title: "PAYMENT (Pembayaran Sewa)",
     columns: [
-      c("id_payment", "ID Payment"), c("id_penghuni", "ID Penghuni"),
-      c("no_invoice", "No Invoice"), c("billing_period", "Periode Tagihan"),
+      c("id_payment", "No Invoice"), c("id_penghuni", "ID Penghuni"),
+      c("periode_awal", "Periode Awal"), c("periode_akhir", "Periode Akhir"),
       c("amount", "Nominal"), c("payment_date", "Tanggal Bayar"),
       c("payment_method", "Metode"), c("status", "Status Pembayaran"),
       c("notes", "Catatan"),
@@ -160,8 +162,9 @@ const SHEET_MAP = {
   occupancy_history: {
     title: "HISTORICAL CUSTOMER (Retensi)",
     columns: [
-      c("nama", "Nama Lengkap"), c("no_kamar", "No Kamar"),
+      c("id_penghuni", "ID Penghuni"), c("nama", "Nama Lengkap"), c("no_kamar", "No Kamar"),
       c("tanggal_mulai", "Tanggal Masuk"), c("tanggal_selesasi", "Tanggal Keluar"),
+      c("status", "Status Huni"),
     ],
   },
 };

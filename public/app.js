@@ -270,6 +270,10 @@
     hp:r[12], wa:r[12], // fallback offline (snapshot tak punya No HP Penghuni) — live diisi dari sheet
   }));
   let OCC_BY_ROOM = {}, ROOMS = [], PEMBAYARAN = [];
+  let PAYMENTS = [];   // baris mentah tabel `payment` Turso (id_penghuni, periode_awal/akhir, nominal, dst)
+  let OCCUPANTS = [];  // baris occupancy_history (id_penghuni, nama, kamar, status) — join nama & penghuni aktif
+  let TEMPO = null;    // {list, tunggakan, jatuhTempo} dihitung dari payment.periode_akhir (tanggal device)
+  let PAY_FILTER = ""; // filter dropdown nama penghuni di halaman Data Pembayaran
   let LOGBOOK = [];
   let STATS = {}; // metrik turunan (okupansi, kontrak, jatuh tempo) dihitung dari data live
   let FINANCE = null; // ringkasan keuangan dari kolom "Dampak Laba" di 3_KEUANGAN
@@ -344,10 +348,66 @@
       aktif, booking, tunggakan, jatuhTempo, kapasitas, occupied, kosong,
       okupansi: kapasitas ? Math.round((occupied / kapasitas) * 100) : 0,
     };
+    // Tunggakan/jatuh tempo dari payment.periode_akhir (recomputeTempo) menang atas
+    // hitungan booking di atas — recompute ini bisa dipanggil ulang setelahnya (hidrasi KAMAR).
+    if (TEMPO) { STATS.tunggakan = TEMPO.tunggakan; STATS.jatuhTempo = TEMPO.jatuhTempo; }
     // CATATAN: Data Pembayaran TIDAK lagi dibuat dari PENGHUNI (dulu fallback ini
     // MENIMPA data jurnal live karena recompute dipanggil ulang saat hidrasi KAMAR,
     // dan menampilkan "pembayaran" fiktif dari Tgl Masuk penghuni). PEMBAYARAN kini
     // HANYA diisi dari jurnal TRANSAKSI (3_KEUANGAN); kosong = tampil "Tidak ada data".
+  }
+
+  /* Tempo berbasis tabel `payment`: MAX(periode_akhir) per id_penghuni dibanding tanggal
+     DEVICE (new Date() = zona waktu browser, fleksibel di mana pun device berada).
+     Aman bila periode_akhir > hari ini; <= hari ini = tunggakan; sisa 1..7 hari = jatuh tempo.
+     Penghuni aktif TANPA payment sewa tampil di daftar sbg "Belum ada data" (blind spot),
+     tidak dihitung di scorecard. Dipanggil setelah PAYMENTS & OCCUPANTS terhidrasi. */
+  function recomputeTempo() {
+    const occById = {};
+    OCCUPANTS.forEach(oc => { if (oc.id) occById[oc.id] = oc; });
+    if (PAYMENTS.length) {
+      // Data Pembayaran (drill-down): terbaru → terlama, tanggal kosong paling bawah.
+      const payPill = (s) => /paid|lunas/i.test(s) ? { t: s || "Paid", c: "s-complete" } : { t: s || "Pending", c: "s-pending" };
+      PEMBAYARAN = PAYMENTS.map(x => {
+        const nm = (occById[x.idP] || {}).nama || "";
+        return {
+          check: false, tanggal: x.tgl || "", _t: parseDate(x.tgl),
+          idPenghuni: x.idP, nama: nm, name: nm,
+          jenisTx: payPill(x.status), namaTx: x.inv || "Tagihan sewa",
+          jumlah: "Rp" + (parseInt(String(x.amount).replace(/[^0-9]/g, ""), 10) || 0).toLocaleString("id-ID"),
+          keterangan: [[x.awal, x.akhir].filter(Boolean).map(fmtDateID).join(" s.d. "), x.metode, x.notes].filter(Boolean).join(" · "),
+        };
+      }).sort((a, b) => (b._t ? b._t.getTime() : -1) - (a._t ? a._t.getTime() : -1));
+    }
+    if (!OCCUPANTS.length || !PAYMENTS.length) return;
+    const maxAkhir = {}; // id_penghuni → {d: Date, raw: string} periode_akhir terbesar
+    PAYMENTS.forEach(x => {
+      const d = parseDate(x.akhir);
+      if (x.idP && d && (!maxAkhir[x.idP] || d > maxAkhir[x.idP].d)) maxAkhir[x.idP] = { d, raw: x.akhir };
+    });
+    const today = startOfDay(new Date()), DAY = 86400000;
+    const aktifOcc = OCCUPANTS.filter(oc => !String(oc.keluar || "").trim() && !/check-?out/i.test(oc.status || ""));
+    const waOf = (oc) => {
+      const p = PENGHUNI.find(p =>
+        String(p.nama).trim().toLowerCase() === String(oc.nama).trim().toLowerCase() ||
+        (oc.kamar && String(p.kamar) === String(+String(oc.kamar).replace(/[^0-9]/g, ""))));
+      return p ? (p.hp || p.kontak || "") : "";
+    };
+    let tunggakan = 0, jatuhTempo = 0;
+    const list = [];
+    aktifOcc.forEach(oc => {
+      const mx = maxAkhir[oc.id];
+      if (!mx) { list.push({ name: oc.nama, nama: oc.nama, wa: waOf(oc), tempo: "—", sisa: "Belum ada data", _s: 9e9 }); return; }
+      const s = Math.round((mx.d - today) / DAY);
+      if (s <= 0) tunggakan++; else if (s <= 7) jatuhTempo++;
+      if (s <= 7) list.push({
+        name: oc.nama, nama: oc.nama, wa: waOf(oc), tempo: mx.raw,
+        sisa: s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi", _s: s,
+      });
+    });
+    list.sort((a, b) => a._s - b._s);
+    TEMPO = { list, tunggakan, jatuhTempo };
+    STATS.tunggakan = tunggakan; STATS.jatuhTempo = jatuhTempo;
   }
   // NB: recomputeFromPenghuni() memanggil parseDate (butuh MONTHS_ID, dideklarasikan
   // di bawah). Panggilan awal dipindah ke setelah parseDate siap (cari INIT_RECOMPUTE).
@@ -607,7 +667,7 @@
     penghuniSales: [{key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"tempo",label:"Tanggal Jatuh Tempo"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"}],
     pembayaran: [
       {key:"check",label:""},{key:"tanggal",label:"Tanggal"},{key:"idPenghuni",label:"ID Penghuni"},
-      {key:"jenisTx",label:"Jenis Transaksi"},
+      {key:"name",label:"Nama"},{key:"jenisTx",label:"Jenis Transaksi"},
       {key:"namaTx",label:"Nama Transaksi"},{key:"jumlah",label:"Jumlah"},{key:"keterangan",label:"Keterangan"},
     ],
     dokumen: [{key:"id",label:"ID Docs"},{key:"name",label:"Judul"},{key:"open",label:"Link"}],
@@ -634,7 +694,19 @@
   /* -------- shared page renderers -------- */
   const pagePenghuni   = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuni, data:dataPenghuni(), paginate:true });
   const pagePenghuniSales = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuniSales, data:PENGHUNI });
-  const pagePembayaran = () => table({ title:"DATA PEMBAYARAN", cols:COLS.pembayaran, data:PEMBAYARAN });
+  // Data Pembayaran: dropdown filter nama penghuni; baris sudah urut terbaru → terlama (recomputeTempo)
+  const pagePembayaran = () => {
+    const names = [...new Set(PEMBAYARAN.map(r => r.nama).filter(Boolean))].sort();
+    const rows = PAY_FILTER ? PEMBAYARAN.filter(r => r.nama === PAY_FILTER) : PEMBAYARAN;
+    const dd = names.length ? `<div style="margin:0 0 10px"><select id="payTenantFilter" class="chip">
+      <option value="">Semua Penghuni</option>
+      ${names.map(n => `<option value="${esc(n)}"${n === PAY_FILTER ? " selected" : ""}>${esc(n)}</option>`).join("")}
+    </select></div>` : "";
+    return dd + table({ title:"DATA PEMBAYARAN", cols:COLS.pembayaran, data:rows });
+  };
+  document.addEventListener("change", (e) => {
+    if (e.target && e.target.id === "payTenantFilter") { PAY_FILTER = e.target.value; render(); }
+  });
   const pageDokumen    = (role) => table({ title:"DOKUMEN " + role.toUpperCase(), cols:(String(role).toLowerCase() === "owner" ? COLS.dokumenOwner : COLS.dokumen), data:dokumenRows(role, 6) });
   const stackTables    = (...blocks) => `<div class="view">${blocks.join("")}</div>`;
 
@@ -703,17 +775,17 @@
       { label:"Tunggakan", value:String(STATS.tunggakan ?? 0), spark:tempoSpark, bg:G.adminDarkO, onDark:true },
       { label:"Jatuh Tempo", value:String(STATS.jatuhTempo ?? 0), spark:tempoSpark, bg:G.adminDarkG, onDark:true },
     ];
-    // Daftar Jatuh Tempo: SELURUH penghuni dgn Sisa Hari ≤ 7 (ambang dari PARAMETER).
-    // Flag Tagih di sheet tidak konsisten → pakai Sisa Hari (akurat). Fallback hitung dari Tgl Jatuh Tempo.
+    // Daftar Jatuh Tempo: utamakan data payment.periode_akhir (recomputeTempo, tanggal device);
+    // fallback lama (Sisa Hari dari tab PENGHUNI) hanya bila payment belum terhidrasi.
     const today0 = startOfDay(new Date());
     const sisaOf = (p) => { if (p.sisa != null) return p.sisa; const d = parseDate(p.tempo); return d ? Math.round((d - today0) / 86400000) : null; };
-    const overdue = PENGHUNI.map(p => ({ p, s: sisaOf(p) }))
+    const jatuh = TEMPO ? TEMPO.list : PENGHUNI.map(p => ({ p, s: sisaOf(p) }))
       .filter(x => x.s != null && x.s <= 7)
-      .sort((a, b) => a.s - b.s);
-    const jatuh = overdue.map(({ p, s }) => ({
-      nama:p.nama, name:p.nama, wa:p.hp, tempo:p.tempo,
-      sisa: s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi",
-    }));
+      .sort((a, b) => a.s - b.s)
+      .map(({ p, s }) => ({
+        nama:p.nama, name:p.nama, wa:p.hp, tempo:p.tempo,
+        sisa: s < 0 ? "Telat " + (-s) + " hr" : s === 0 ? "Hari ini" : s + " hr lagi",
+      }));
     const kontrakDonut = [{t:"Aktif",value:STATS.aktif||0,c:PAL.admin[0]},{t:"Booking",value:STATS.booking||0,c:PAL.admin[1]}];
     // OPEX bar — data real; kosong → empty state
     const obars = F ? topEntries(F.opexBy,4) : [];
@@ -1735,19 +1807,13 @@
       const num = (s) => { const n = parseInt(String(s).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
 
       // Pembayaran sewa per penghuni (tab PAYMENT dari tabel `payment` Turso).
-      // Punya ID Penghuni asli → prioritas di atas jurnal; jurnal tetap fallback bila kosong.
+      // Skema baru: id_payment = No Invoice, periode_awal/periode_akhir terpisah.
+      // Tampilan/metrik dibangun di recomputeTempo() setelah occupancy juga terhidrasi.
       const payKey = Object.keys(sheets).find(k => /payment/i.test(k));
       const payRows = payKey && sheets[payKey];
       if (Array.isArray(payRows) && payRows.length >= 2) {
-        const o = objs(payRows, { idP:["id penghuni"], inv:["no invoice"], periode:["periode"], amount:["nominal"], tgl:["tanggal bayar"], metode:["metode"], status:["status"], notes:["catatan"] });
-        const payPill = (s) => /paid|lunas/i.test(s) ? { t:s || "Paid", c:"s-complete" } : { t:s || "Pending", c:"s-pending" };
-        const P = o.filter(x => x.idP || x.inv).map(x => ({
-          check:false, tanggal: x.tgl ? fmtDateID(x.tgl) : "", idPenghuni: x.idP,
-          jenisTx: payPill(x.status), namaTx: x.inv || "Tagihan sewa",
-          jumlah: "Rp" + num(x.amount).toLocaleString("id-ID"),
-          keterangan: [x.periode, x.metode, x.notes].filter(Boolean).join(" · "),
-        }));
-        if (P.length) PEMBAYARAN = P;
+        const o = objs(payRows, { idP:["id penghuni"], inv:["no invoice","id payment"], awal:["periode awal"], akhir:["periode akhir"], amount:["nominal"], tgl:["tanggal bayar"], metode:["metode"], status:["status"], notes:["catatan"] });
+        PAYMENTS = o.filter(x => x.idP || x.inv);
       }
 
       // Leads (Marketing)
@@ -1816,8 +1882,9 @@
       // Historical Customer → Retention Rate (ID | Nama Lengkap | Tanggal Masuk | Tanggal Keluar)
       const histTab = findTab(h => has(h, "nama lengkap") && has(h, "tanggal masuk") && has(h, "tanggal keluar"));
       if (histTab) {
-        const o = objs(histTab, { nama:["nama lengkap","nama"], masuk:["tanggal masuk"], keluar:["tanggal keluar"] });
+        const o = objs(histTab, { id:["id penghuni"], nama:["nama lengkap","nama"], kamar:["no kamar"], masuk:["tanggal masuk"], keluar:["tanggal keluar"], status:["status huni","status"] });
         const recs = o.filter(x => x.nama);
+        OCCUPANTS = recs; // join nama & daftar penghuni aktif utk metrik tempo (recomputeTempo)
         const hasKeluar = (v) => { const t = String(v || "").trim(); return t && t !== "-"; };
         const churnedRecs = recs.filter(x => hasKeluar(x.keluar));
         const total = recs.length, churned = churnedRecs.length;
@@ -1839,6 +1906,8 @@
         const D = o.filter(x => x.name).map((x, i) => ({ id:x.id || "DOC-"+pad3(i+1), name:x.name, role:x.role, kategori:x.kategori, tanggal:x.tanggal, link:x.link || "https://drive.google.com/drive/my-drive" }));
         if (D.length) DOKUMEN = D;
       }
+      // Metrik tempo/tunggakan + Data Pembayaran dari tabel payment (setelah semua tab terhidrasi)
+      recomputeTempo();
     } catch {}
   }
 
