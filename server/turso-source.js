@@ -42,13 +42,15 @@ function toSheets(tables) {
 
 /* Turunkan daftar penghuni AKTIF dari booking. Status yang dihitung sebagai
    penghuni saat ini: selain "Check-out" dan yang dibatalkan (Cancel/Batal).
-   Diperkaya profil dari tabel `penghuni` (kontak darurat 2 set, email, dll) —
-   match by nama (case-insensitive) lalu fallback no kamar. */
+   Diperkaya profil dari tabel `active_tenant` (kontak darurat 2 set, email, dll;
+   dirawat trigger check-in/out, lihat server/migrations/) — match by id_penghuni,
+   lalu nama (case-insensitive), lalu fallback no kamar. */
 function derivePenghuni(tables) {
   const kamarByNo = {};
   for (const k of tables.kamar || []) kamarByNo[String(k.no_kamar)] = k;
-  const profByNama = {}, profByKamar = {};
-  for (const p of tables.penghuni || []) {
+  const profById = {}, profByNama = {}, profByKamar = {};
+  for (const p of tables.active_tenant || tables.penghuni || []) {
+    if (p.id_penghuni) profById[String(p.id_penghuni).trim()] = p;
     if (p.nama_lengkap) profByNama[String(p.nama_lengkap).trim().toLowerCase()] = p;
     if (p.no_kamar != null && p.no_kamar !== "") profByKamar[String(p.no_kamar).trim()] = p;
   }
@@ -70,7 +72,8 @@ function derivePenghuni(tables) {
     .map((b) => {
       n++;
       const km = kamarByNo[String(b.kamar_no)];
-      const pr = profByNama[String(b.nama_penyewa).trim().toLowerCase()]
+      const pr = profById[String(b.id_penghuni || "").trim()]
+        || profByNama[String(b.nama_penyewa).trim().toLowerCase()]
         || profByKamar[String(b.kamar_no)] || {};
       return [
         n,
