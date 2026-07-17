@@ -95,6 +95,27 @@ function derivePenghuni(tables) {
         v(pr.email),
       ];
     });
+
+  // Penghuni lama (check-in sebelum sistem booking) hanya ada di active_tenant —
+  // tanpa baris booking. Tambahkan agar daftar penghuni & okupansi lengkap.
+  const seenId = new Set(), seenKamar = new Set();
+  for (const r of body) { if (r[1]) seenId.add(String(r[1]).trim()); if (r[4] !== "") seenKamar.add(String(r[4])); }
+  for (const p of tables.active_tenant || tables.penghuni || []) {
+    if (!p.nama_lengkap) continue;
+    const noKamar = String(p.no_kamar != null && p.no_kamar !== "" ? p.no_kamar : String(p.kamar_id || "").replace(/[^0-9]/g, ""));
+    if ((p.id_penghuni && seenId.has(String(p.id_penghuni).trim())) || (noKamar && seenKamar.has(noKamar))) continue;
+    n++;
+    const km = kamarByNo[noKamar];
+    body.push([
+      n, v(p.id_penghuni), p.nama_lengkap, v(p.nama_panggilan), noKamar,
+      km ? km.tipe_kamar : "", v(p.asal_daerah), v(p.pekerjaan), v(p.instansi),
+      v(p.tanggal_masuk), "", "", "Aktif",
+      v(p.no_hp),
+      v(p.nomor_darurat_1), v(p.hubungan_kontak_darurat_1), v(p.nama_kontak_darurat_1),
+      v(p.nomor_darurat_2), v(p.hubungan_kontak_darurat_2), v(p.nama_kontak_darurat_2),
+      v(p.email),
+    ]);
+  }
   return [header, ...body];
 }
 

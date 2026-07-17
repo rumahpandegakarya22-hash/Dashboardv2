@@ -517,6 +517,13 @@ table.tbl tbody tr.is-selected td { background: rgba(255,255,255,.05); }
 }
 .pager button.is-active { background: rgba(255,255,255,.12); color: var(--text); }
 .pager button:hover { color: var(--text); }
+.pager button:disabled { opacity: .35; cursor: default; }
+.pager button:disabled:hover { color: var(--text-2); }
+.pager .pager-size {
+  height: 30px; padding: 0 10px; border: none; border-radius: var(--r-pill);
+  background: rgba(255,255,255,.04); color: var(--text-2); font-size: 12.5px; cursor: pointer;
+}
+.pager .pager-info { align-self: center; color: var(--text-2); font-size: 12px; margin-left: 4px; }
 
 /* =========================== DATA KAMAR ================================= */
 .rooms { display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); gap: 14px; }

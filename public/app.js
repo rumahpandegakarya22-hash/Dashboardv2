@@ -140,13 +140,13 @@
   }
 
   // multi-line chart (2–3 seri) dgn marker. seriesList: array seri; sumbu Y dinamis
-  // (mendukung nilai negatif untuk Laba Rugi); callout berformat pemisah ribuan + unit.
+  // (mendukung nilai negatif untuk Laba Bersih); callout berformat pemisah ribuan + unit.
   const LINE_COLORS = ["var(--teal)", "var(--text-2)", "#e0a13a"];
   function lineChart(seriesList, xLabels, names, unit) {
     const w = 460, h = 200, padL = 48, padB = 24, padT = 14;
     const cw = w - padL - 6, ch = h - padB - padT;
     const series = (Array.isArray(seriesList) ? seriesList : [seriesList]).filter((s) => Array.isArray(s) && s.length);
-    const nm = names || ["Pendapatan Kotor", "Beban Operasional", "Laba Rugi"];
+    const nm = names || ["Pendapatan Kotor", "Beban Operasional", "Laba Bersih"];
     const all = series.flat().map(Number);
     const rawMax = Math.max(1, ...all), rawMin = Math.min(0, ...all), span = (rawMax - rawMin) || 1;
     const X = (i, len) => padL + (i / Math.max(1, len - 1)) * cw, Y = (v) => padT + ch - ((Number(v) - rawMin) / span) * ch;
@@ -609,7 +609,7 @@
   const FUNNEL_ICO = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.6 3h12.8L9.2 9.1v3.4l-2.4 1.2V9.1z" fill="currentColor"/></svg>';
   const NO_FILTER_COLS = new Set(["check", "aksi", "open", "tagihan"]);
   function table(cfg) {
-    const { title, cols, paginate, titleRight } = cfg;
+    const { title, cols, titleRight } = cfg;
     const dateKey = cfg.dateKey || (cols.some(c => c.key === "tanggal") ? "tanggal" : null);
     const data = filterByPeriod(cfg.data, dateKey);
     const heads = cols.map((c, i) => {
@@ -643,20 +643,18 @@
       }).join("");
       return `<tr class="${r.sel ? "is-selected" : ""}">${tds}</tr>`;
     }).join("") || `<tr class="tbl-empty"><td colspan="${cols.length}">Tidak ada data pada periode <b>${cur.period}</b>.</td></tr>`;
-    const pager = (paginate && data.length) ? `<nav class="pager">${[1,2,3,4,5].map(p => `<button class="${p===1?"is-active":""}">${p}</button>`).join("")}
-      <button aria-label="Sebelumnya">${I.arrowL}</button><button aria-label="Berikutnya">${I.arrowR}</button></nav>` : "";
     return `<section class="table-block">
       ${title ? `<h2 class="section-title ${titleRight ? "right" : ""}">${title}</h2>` : ""}
       ${toolbar()}
       <div class="card" style="padding:4px 2px"><div class="tbl-wrap"><table class="tbl">
         <thead><tr>${heads}</tr></thead><tbody>${body}</tbody></table></div></div>
-      ${pager}</section>`;
+      <nav class="pager" data-pager hidden></nav></section>`;
   }
 
   /* ------- column sets ------- */
   const COLS = {
     penghuni: [
-      {key:"no",label:"No"},{key:"id",label:"ID"},{key:"name",label:"Nama Lengkap"},{key:"panggil",label:"Panggilan"},
+      {key:"id",label:"ID"},{key:"name",label:"Nama Lengkap"},{key:"panggil",label:"Panggilan"},
       {key:"kamar",label:"No Kamar"},{key:"jenis",label:"Jenis Kamar"},{key:"asal",label:"Asal Daerah"},{key:"kerja",label:"Pekerjaan"},
       {key:"instansi",label:"Instansi"},{key:"durasi",label:"Durasi (Bln)"},{key:"masuk",label:"Tanggal Masuk"},{key:"tempo",label:"Jatuh Tempo"},
       {key:"kostStatus",label:"Status"},{key:"hp",label:"No HP Penghuni"},{key:"aksi",label:"WhatsApp"},
@@ -692,7 +690,7 @@
   const surveyRows = () => SURVEY;
 
   /* -------- shared page renderers -------- */
-  const pagePenghuni   = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuni, data:dataPenghuni(), paginate:true });
+  const pagePenghuni   = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuni, data:dataPenghuni() });
   const pagePenghuniSales = () => table({ title:"DAFTAR PENGHUNI", cols:COLS.penghuniSales, data:PENGHUNI });
   // Data Pembayaran: dropdown filter nama penghuni; baris sudah urut terbaru → terlama (recomputeTempo)
   const pagePembayaran = () => {
@@ -797,8 +795,8 @@
     if (hasFin) {
       const lsc = moneyScale(Math.max(1,...F.cashSeries,...F.expSeries,...F.labaSeries.map(Math.abs)));
       const U = lsc.unit ? " ("+lsc.unit+")" : "";
-      lineCard = chartCard("Pendapatan Kotor vs Beban vs Laba Rugi", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}]);
-    } else lineCard = emptyCard("Pendapatan Kotor vs Beban vs Laba Rugi");
+      lineCard = chartCard("Pendapatan Kotor vs Beban vs Laba Bersih", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Bersih"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Bersih"+U,c:"#e0a13a"}]);
+    } else lineCard = emptyCard("Pendapatan Kotor vs Beban vs Laba Bersih");
     return `<div class="view">${statGrid(cards,5)}
       <div class="grid row-3 mt">
         ${donutBlock("Komposisi Kontrak", kontrakDonut, {centerLabel:"Total Kontrak"})}
@@ -904,14 +902,17 @@
     ];
     const opex = F ? topEntries(F.opexBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [];
     const income = F ? topEntries(F.incomeBy,6).map((e,i)=>({t:shortAcct(e[0]),value:e[1],c:PAL.owner[i%4]})) : [];
-    const kamar = [{t:"Terisi",value:STATS.aktif||0,c:PAL.owner[0]},{t:"Booking",value:STATS.booking||0,c:PAL.owner[1]},{t:"Kosong",value:STATS.kosong||0,c:PAL.owner[2]}];
+    // Komposisi status KAMAR dihitung dari ROOMS (master 29 kamar), bukan jumlah penghuni
+    const roomCnt = (s) => ROOMS.filter(r => r.status === s).length;
+    const kamar = [{t:"Terisi",value:roomCnt("Terisi"),c:PAL.owner[0]},{t:"Booking",value:roomCnt("Booking"),c:PAL.owner[1]},{t:"Kosong",value:roomCnt("Kosong"),c:PAL.owner[2]}];
+    const nMaint = roomCnt("Maintenance"); if (nMaint) kamar.push({t:"Maintenance",value:nMaint,c:PAL.owner[3]});
     // Line keuangan — data real; kosong → empty state
     let lineCard;
     if (hasFin) {
       const lsc = moneyScale(Math.max(1,...F.cashSeries,...F.expSeries,...F.labaSeries.map(Math.abs)));
       const U = lsc.unit ? " ("+lsc.unit+")" : "";
-      lineCard = chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Rugi"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Rugi"+U,c:"#e0a13a"}]);
-    } else lineCard = emptyCard("Pendapatan Kotor vs Beban Operasional vs Laba Rugi");
+      lineCard = chartCard("Pendapatan Kotor vs Beban Operasional vs Laba Bersih", lineChart([scaleVals(F.cashSeries,lsc),scaleVals(F.expSeries,lsc),scaleVals(F.labaSeries,lsc)],F.labels,["Pendapatan Kotor","Beban Operasional","Laba Bersih"],lsc.unit), [{t:"Pendapatan Kotor"+U,c:"var(--teal)"},{t:"Beban Operasional"+U,c:"var(--text-2)"},{t:"Laba Bersih"+U,c:"#e0a13a"}]);
+    } else lineCard = emptyCard("Pendapatan Kotor vs Beban Operasional vs Laba Bersih");
     // Bar Beban Operasional — data real; kosong → empty state
     const obars = F ? topEntries(F.opexBy,5) : [];
     let barCard;
@@ -1569,17 +1570,52 @@
     };
     const active = new Map(); // colIndex -> Set(nilai terpilih, lowercase). Tak ada entri = tampilkan semua.
 
-    // Search global + filter kolom aktif digabung (AND)
+    // ---- pagination: 10/20/30 baris per halaman + first/prev/nomor/next/last ----
+    const pager = block.querySelector("[data-pager]");
+    let page = 1, pageSize = 10, gq = ""; // gq = query dari search global (topbar)
+    const visRows = () => dataRows().filter(tr => tr._match !== false);
+    function repage(reset) {
+      if (reset) page = 1;
+      const rs = visRows();
+      const total = Math.max(1, Math.ceil(rs.length / pageSize));
+      if (page > total) page = total;
+      dataRows().forEach(tr => { tr.style.display = "none"; });
+      rs.forEach((tr, i) => { tr.style.display = (i >= (page - 1) * pageSize && i < page * pageSize) ? "" : "none"; });
+      if (!pager) return;
+      pager.hidden = !rs.length;
+      // jendela maks 5 nomor halaman di sekitar halaman aktif
+      let a = Math.max(1, page - 2); const b = Math.min(total, a + 4); a = Math.max(1, b - 4);
+      let nums = ""; for (let p = a; p <= b; p++) nums += `<button type="button" data-pg="${p}" class="${p === page ? "is-active" : ""}">${p}</button>`;
+      const nav = (act, label, dis) => `<button type="button" data-pg="${act}" ${dis ? "disabled" : ""} aria-label="${act}">${label}</button>`;
+      pager.innerHTML =
+        `<select class="pager-size" aria-label="Baris per halaman">${[10, 20, 30].map(s => `<option value="${s}"${s === pageSize ? " selected" : ""}>${s} / hal</option>`).join("")}</select>` +
+        nav("first", "«", page === 1) + nav("prev", "‹", page === 1) + nums +
+        nav("next", "›", page === total) + nav("last", "»", page === total) +
+        `<span class="pager-info">${rs.length} data</span>`;
+    }
+    pager?.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-pg]"); if (!b || b.disabled) return;
+      const total = Math.max(1, Math.ceil(visRows().length / pageSize));
+      const a = b.dataset.pg;
+      page = a === "first" ? 1 : a === "prev" ? Math.max(1, page - 1) : a === "next" ? Math.min(total, page + 1) : a === "last" ? total : +a;
+      repage();
+    });
+    pager?.addEventListener("change", (e) => { if (e.target.classList.contains("pager-size")) { pageSize = +e.target.value; repage(true); } });
+
+    // Search global + search tabel + filter kolom aktif digabung (AND); hasilnya dipaginasi
     const search = block.querySelector('[data-act="tsearch"]');
     const applyFilters = () => {
-      const gq = (search?.value || "").toLowerCase();
+      const tq = (search?.value || "").toLowerCase();
       dataRows().forEach(tr => {
-        let ok = !gq || tr.textContent.toLowerCase().includes(gq);
+        const txt = tr.textContent.toLowerCase();
+        let ok = (!tq || txt.includes(tq)) && (!gq || txt.includes(gq));
         if (ok) for (const [i, set] of active) { if (!set.has(cellText(tr, i).toLowerCase())) { ok = false; break; } }
-        tr.style.display = ok ? "" : "none";
+        tr._match = ok;
       });
+      repage(true);
     };
     search?.addEventListener("input", applyFilters);
+    block._gsearch = (q) => { gq = String(q || "").toLowerCase(); applyFilters(); };
 
     // ---- dropdown filter per kolom (corong, AutoFilter) ----
     let menu = null;
@@ -1633,10 +1669,12 @@
         const rs = dataRows();
         rs.sort((a, b) => { const ta = cellText(a, i), tb = cellText(b, i); return dir === "asc" ? ta.localeCompare(tb, "id", { numeric: true }) : tb.localeCompare(ta, "id", { numeric: true }); });
         rs.forEach(r => tbody.appendChild(r));
+        repage(); // urutan berubah → tampilkan ulang halaman aktif
       });
     });
 
     block.querySelector('[data-act="add"]')?.addEventListener("click", addDocument);
+    repage(true); // tampilan awal: halaman 1
   }
 
   function bind(root) {
@@ -1662,11 +1700,10 @@
       if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.();
     });
 
-    // global search → filter every table on the page
+    // global search → filter every table on the page (lewat pagination per tabel)
     const gs = root.querySelector("#globalSearch");
     gs?.addEventListener("input", () => {
-      const q = gs.value.toLowerCase();
-      root.querySelectorAll(".tbl tbody tr").forEach(tr => { tr.style.display = tr.textContent.toLowerCase().includes(q) ? "" : "none"; });
+      root.querySelectorAll(".table-block").forEach(bl => bl._gsearch && bl._gsearch(gs.value));
     });
 
     // period filter
