@@ -679,6 +679,9 @@
     // Logbook Operasional (sesuai desain)
     logInspeksi: [{key:"name",label:"Tanggal"},{key:"item",label:"Item"},{key:"lokasi",label:"Lokasi"},{key:"kategori",label:"Kategori"},{key:"status",label:"Prioritas"}],
     logPerbaikan: [{key:"id",label:"ID"},{key:"name",label:"PIC"},{key:"project",label:"Project"},{key:"prioritas",label:"Prioritas"},{key:"biaya",label:"Biaya"},{key:"status",label:"Status"}],
+    // Stok Inventory (monitoring dari app Inventory Stock — integrasi 3 app)
+    stokMaterial: [{key:"name",label:"Bahan"},{key:"category",label:"Kategori"},{key:"stok",label:"Stok"},{key:"min",label:"Stok Min"},{key:"statusStok",label:"Status"}],
+    stokTransaksi: [{key:"tanggal",label:"Tanggal"},{key:"material",label:"Bahan"},{key:"tipe",label:"Tipe"},{key:"jumlah",label:"Jumlah"},{key:"biaya",label:"Biaya"},{key:"oleh",label:"Oleh"},{key:"catatan",label:"Catatan"}],
   };
   // Daftar Prospek/Survey — Nomor WA (teks) + kolom Pertimbangan + Aksi (tombol WA)
   COLS.prospek = [
@@ -963,6 +966,38 @@
       ${table({ title:"DAFTAR PROSPEK", cols:COLS.prospek, data:surveyRows() })}</div>`;
   }
 
+  /* ------------------------------------------- STOK INVENTORY (integrasi 3 app) */
+  // Diisi loadLiveData dari GET /api/inventory (Dashboard baca DB app Inventory Stock,
+  // read-only). null = belum termuat / role tanpa akses / belum dikonfigurasi.
+  let INVENTORY = null;
+
+  function pageInventory() {
+    if (!INVENTORY) {
+      return `<section class="table-block"><h2 class="section-title">STOK INVENTORY</h2>
+        <p style="padding:12px 4px;opacity:.7">Data stok belum tersedia — integrasi app Inventory Stock belum dikonfigurasi atau kamu tidak punya akses.</p></section>`;
+    }
+    const mats = (INVENTORY.materials || []).map(m => {
+      const low = Number(m.current_stock) < Number(m.min_stock);
+      return {
+        name: m.name, category: m.category,
+        stok: fmtNum(m.current_stock, m.unit), min: fmtNum(m.min_stock, m.unit),
+        statusStok: low ? "⚠️ Menipis" : "OK",
+      };
+    });
+    const txs = (INVENTORY.transactions || []).map(t => ({
+      tanggal: t.created_at ? new Date(Number(t.created_at) < 1e12 ? Number(t.created_at) * 1000 : Number(t.created_at)).toISOString().slice(0, 10) : "",
+      material: t.material_name,
+      tipe: t.type === "PURCHASE" ? "Pembelian" : t.type === "USAGE" ? "Pemakaian" : "Koreksi",
+      jumlah: fmtNum(t.quantity, t.unit),
+      biaya: t.total_cost != null ? "Rp" + Math.round(t.total_cost).toLocaleString("id-ID") : "-",
+      oleh: t.user_name || "-", catatan: t.notes || "-",
+    }));
+    return stackTables(
+      table({ title: "STOK BAHAN", titleRight: true, cols: COLS.stokMaterial, data: mats }),
+      table({ title: "MUTASI STOK TERAKHIR", titleRight: true, cols: COLS.stokTransaksi, data: txs }),
+    );
+  }
+
   /* ----------------------------------------------------- ROLE CONFIG */
   const ROLES = {
     admin: {
@@ -972,6 +1007,7 @@
         { id:"penghuni", label:"Daftar Penghuni", group:"page", crumb:"Daftar Penghuni", render: pagePenghuni },
         { id:"pembayaran", label:"Data Pembayaran", group:"page", crumb:"Data Pembayaran", render: pagePembayaran },
         { id:"vendor", label:"Daftar Vendor", group:"page", crumb:"Daftar Vendor", render: () => table({ title:"DAFTAR VENDOR", cols:COLS.vendor, data:VENDOR }) },
+        { id:"stok", label:"Stok Inventory", group:"page", crumb:"Stok Inventory", render: pageInventory },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Admin") },
         { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK ADMIN & KEUANGAN", titleRight:true, cols:COLS.logbook, data:logbookForRole("admin") || logbookRows("admin",6) }) },
       ],
@@ -994,6 +1030,7 @@
         { id:"overview", label:"Overview", group:"dash", crumb:"Operasional", render: opsOverview },
         { id:"tiket", label:"Daftar Tiket", group:"page", crumb:"Daftar Tiket", render: () => table({ title:"DAFTAR TIKET", cols:COLS.tiket, data:(TIKET && TIKET.length ? TIKET : tiketRows(6)) }) },
         { id:"vendor", label:"Daftar Vendor", group:"page", crumb:"Daftar Vendor", render: () => table({ title:"DAFTAR VENDOR", cols:COLS.vendorOps, data:VENDOR }) },
+        { id:"stok", label:"Stok Inventory", group:"page", crumb:"Stok Inventory", render: pageInventory },
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms("ops") },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Operasional") },
         { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => {
@@ -1029,6 +1066,7 @@
         { id:"penghuni", label:"Daftar Penghuni", group:"page", crumb:"Daftar Penghuni", render: pagePenghuni },
         { id:"kamar", label:"Data Kamar", group:"page", crumb:"Data Kamar", render: () => rooms() },
         { id:"pembayaran", label:"Data Pembayaran", group:"page", crumb:"Data Pembayaran", render: pagePembayaran },
+        { id:"stok", label:"Stok Inventory", group:"page", crumb:"Stok Inventory", render: pageInventory },
         { id:"dokumen", label:"Dokumen", group:"page", crumb:"Dokumen", render: () => pageDokumen("Owner") },
         { id:"logbook", label:"Logbook", group:"page", crumb:"Logbook", render: () => table({ title:"LOGBOOK · SEMUA DIVISI", titleRight:true, cols:COLS.logbook,
             data:LOGBOOK.length ? LOGBOOK : ["admin","keuangan","marketing","operasional","sales"].flatMap(d => logbookRows(d,2)) }) },
@@ -1757,6 +1795,14 @@
   /* hidrasi data live dari Google Spreadsheet (Rumah_Pandega_LIVE_v2) bila
      server dikonfigurasi; jika tidak, snapshot bawaan tetap dipakai (fallback). */
   async function loadLiveData() {
+    // Stok inventory (endpoint terpisah, DB app Inventory Stock). Gagal/403 → INVENTORY tetap null.
+    try {
+      const invRes = await fetch("/api/inventory");
+      if (invRes.ok) {
+        const inv = await invRes.json();
+        if (inv.configured && inv.materials) INVENTORY = { materials: inv.materials, transactions: inv.transactions || [] };
+      }
+    } catch {}
     try {
       const res = await fetch("/api/sheets");
       if (!res.ok) return;

@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["server/server.js"],
       "port": 5512
+    },
+    {
+      "name": "inventory-dev",
+      "runtimeExecutable": "npm.cmd",
+      "runtimeArgs": ["run", "dev", "--prefix", "E:/Stock Inventory Kost"],
+      "port": 3000
     }
   ]
 }

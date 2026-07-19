@@ -487,6 +487,24 @@ app.get("/api/db", dataLimiter, requireAuth, async (req, res) => {
   }
 });
 
+/* ---- GET /api/inventory  → monitoring stok dari DB app Inventory Stock (read-only) ----
+   Integrasi 3 app (Improvement v1.3 §Rencana 3): Dashboard cuma MEMBACA DB inventoystock.
+   Akses: owner, admin, operasional — marketing/sales tidak melihat data stok. */
+const inventory = require("./inventory");
+app.get("/api/inventory", dataLimiter, requireAuth, async (req, res) => {
+  if (!["owner", "admin", "operasional"].includes(req.user.role)) {
+    return res.status(403).json({ error: "Tidak punya akses data inventory." });
+  }
+  if (!inventory.isInventoryConfigured()) return res.json({ configured: false });
+  try {
+    const data = await inventory.readInventory();
+    res.json({ configured: true, ...data });
+  } catch (e) {
+    console.error("[api/inventory] gagal baca DB inventory:", e);
+    res.status(502).json({ configured: true, error: "Terjadi kesalahan pada server." });
+  }
+});
+
 /* ---- GET /api/health  → liveness check minimal (tanpa membocorkan konfigurasi backend) ---- */
 app.get("/api/health", async (_req, res) => {
   res.json({ ok: true, ts: Date.now() });
