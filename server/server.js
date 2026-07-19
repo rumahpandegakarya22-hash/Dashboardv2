@@ -87,6 +87,9 @@ const TOTP_COOKIE_TTL = "12h"; // selaras dgn masa aktif sesi wajar; Clerk sendi
 function getStepupSecret() {
   if (process.env.TOTP_STEPUP_SECRET) return process.env.TOTP_STEPUP_SECRET;
   console.warn("[2fa] TOTP_STEPUP_SECRET belum di-set — memakai secret sementara (reset tiap deploy, semua orang akan diminta ulang kode 2FA). Set env ini di produksi!");
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[SECURITY] TOTP_STEPUP_SECRET not set — 2FA step-up cookies will not persist across serverless instances. Set it in the deployment env.");
+  }
   return crypto.randomBytes(48).toString("hex");
 }
 const STEPUP_SECRET = getStepupSecret();
@@ -181,13 +184,26 @@ function hasValidStepup(req, sessionId) {
    defense-in-depth di atas ban Clerk, tapi penegakan utama.
    TAMBAHAN: jika akun sudah aktifkan 2FA kustom (privateMetadata.totpEnabled),
    sesi Clerk yang valid SAJA belum cukup — wajib juga cookie step-up (lihat atas). ---- */
+// Cache ringan userId -> { user, exp } supaya requireAuth tidak memanggil Clerk
+// Backend API pada SETIAP request. TTL pendek (60s) — perubahan role/status oleh
+// Owner tetap efektif dalam <=1 menit. Bukan LRU (jumlah akun internal kecil).
+const CLERK_USER_TTL_MS = 60 * 1000;
+const clerkUserCache = new Map(); // userId -> { user, exp }
+async function getCachedClerkUser(userId) {
+  const hit = clerkUserCache.get(userId);
+  if (hit && hit.exp > Date.now()) return hit.user;
+  const user = await clerkClient.users.getUser(userId);
+  clerkUserCache.set(userId, { user, exp: Date.now() + CLERK_USER_TTL_MS });
+  return user;
+}
+
 async function requireAuth(req, res, next) {
   if (!CLERK_READY) return res.status(503).json({ error: "Auth belum dikonfigurasi di server (CLERK_PUBLISHABLE_KEY/CLERK_SECRET_KEY)" });
   let userId, sessionId;
   try { ({ userId, sessionId } = getAuth(req)); } catch { return res.status(503).json({ error: "Auth belum dikonfigurasi di server" }); }
   if (!userId) return res.status(401).json({ error: "Belum login" });
   let cu;
-  try { cu = await clerkClient.users.getUser(userId); }
+  try { cu = await getCachedClerkUser(userId); }
   catch { return res.status(500).json({ error: "Gagal membaca data akun" }); }
   const role = cu.publicMetadata?.role || null;
   const status = cu.publicMetadata?.status || "pending";
@@ -229,13 +245,21 @@ async function requireClerkSession(req, res, next) {
   next();
 }
 
+/* ---- limiter longgar utk endpoint data/info akun (dashboard internal kecil).
+   Lebih permisif dari totpAuthLimiter (yang khusus percobaan kode) — cukup untuk
+   mencegah abuse/hammering tanpa mengganggu pemakaian normal. ---- */
+const dataLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false,
+  message: { error: "Terlalu banyak permintaan. Coba lagi sebentar." },
+});
+
 /* ---- konfigurasi publik utk frontend (publishable key AMAN diekspos — bukan rahasia) ---- */
 app.get("/api/config", (_req, res) => {
   res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
 });
 
 /* ---- profil akun aktif ---- */
-app.get("/api/me", requireAuth, async (req, res) => {
+app.get("/api/me", dataLimiter, requireAuth, async (req, res) => {
   res.json({ username: req.user.username, role: req.user.role, name: req.user.name, tfaEnabled: !!req.clerkUser.privateMetadata?.totpEnabled });
 });
 
@@ -252,7 +276,7 @@ app.post("/api/totp/setup", requireClerkSession, totpAuthLimiter, async (req, re
   const secret = speakeasy.generateSecret({ name: `${APP_NAME} (${req.clerkUser.username || req.clerkUserId})`, length: 20 });
   try {
     await clerkClient.users.updateUserMetadata(req.clerkUserId, { privateMetadata: { totpPendingSecret: secret.base32 } });
-  } catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
+  } catch (e) { console.error("[totp/setup] gagal simpan pending secret:", e); return res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
   res.json({ secret: secret.base32, uri: secret.otpauth_url });
 });
 
@@ -265,7 +289,7 @@ app.post("/api/totp/enable", requireClerkSession, totpAuthLimiter, async (req, r
   try {
     await clerkClient.users.updateUserMetadata(req.clerkUserId, { privateMetadata: { totpSecret: pending, totpEnabled: true, totpPendingSecret: null } });
     issueStepupCookie(res, req.clerkSessionId); // sudah membuktikan penguasaan TOTP → langsung step-up, tak perlu isi ulang
-  } catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
+  } catch (e) { console.error("[totp/enable] gagal aktifkan 2FA:", e); return res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
   res.json({ ok: true, tfaEnabled: true });
 });
 
@@ -276,7 +300,7 @@ app.post("/api/totp/disable", requireAuth, totpAuthLimiter, async (req, res) => 
   const ok = speakeasy.totp.verify({ secret, encoding: "base32", token: String(code || "").trim(), window: 1 });
   if (!ok) return res.status(401).json({ error: "Kode OTP salah" });
   try { await clerkClient.users.updateUserMetadata(req.user.id, { privateMetadata: { totpSecret: null, totpEnabled: false, totpPendingSecret: null } }); }
-  catch (e) { return res.status(500).json({ error: "Gagal menyimpan data: " + e.message }); }
+  catch (e) { console.error("[totp/disable] gagal matikan 2FA:", e); return res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
   res.clearCookie(TOTP_COOKIE);
   res.json({ ok: true, tfaEnabled: false });
 });
@@ -305,7 +329,7 @@ app.post("/api/webhooks/clerk", async (req, res) => {
   try {
     const wh = new Webhook(secret);
     evt = wh.verify(req.rawBody, { "svix-id": svixId, "svix-timestamp": svixTimestamp, "svix-signature": svixSignature });
-  } catch (e) { return res.status(400).json({ error: "Verifikasi webhook gagal: " + e.message }); }
+  } catch (e) { console.error("[webhooks/clerk] verifikasi svix gagal:", e); return res.status(400).json({ error: "Verifikasi webhook gagal." }); }
   if (evt.type === "user.created") {
     const u = evt.data;
     try {
@@ -329,7 +353,7 @@ app.get("/api/users", requireAuth, requireOwner, async (_req, res) => {
       email: (u.emailAddresses && u.emailAddresses[0] && u.emailAddresses[0].emailAddress) || null,
     }));
     res.json(users);
-  } catch (e) { res.status(500).json({ error: "Gagal membaca data akun: " + e.message }); }
+  } catch (e) { console.error("[users] gagal baca daftar akun:", e); res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
 });
 app.post("/api/users/approve", requireAuth, requireOwner, async (req, res) => {
   const { username, role } = req.body || {};
@@ -344,7 +368,7 @@ app.post("/api/users/approve", requireAuth, requireOwner, async (req, res) => {
     // kegagalan (mis. Backend API menolak di Free plan) diabaikan dengan sengaja.
     try { await clerkClient.users.unbanUser(u.id); } catch { /* abaikan — lihat komentar di atas */ }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
+  } catch (e) { console.error("[users/approve] gagal simpan role/status:", e); res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
 });
 app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
   const { username } = req.body || {};
@@ -357,7 +381,7 @@ app.post("/api/users/disable", requireAuth, requireOwner, async (req, res) => {
     if (!u) return res.status(404).json({ error: "Akun tidak ditemukan" });
     await clerkClient.users.updateUserMetadata(u.id, { publicMetadata: { status: "disabled" } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: "Gagal menyimpan: " + e.message }); }
+  } catch (e) { console.error("[users/disable] gagal nonaktifkan akun:", e); res.status(500).json({ error: "Terjadi kesalahan pada server." }); }
 });
 
 /* ---- POST /api/documents  → buat Sheet/Doc baru di folder Drive role ---- */
@@ -379,7 +403,8 @@ app.post("/api/documents", requireAuth, async (req, res) => {
     });
     res.json({ id: file.data.id, name: file.data.name, url: file.data.webViewLink });
   } catch (e) {
-    res.status(500).json({ error: "Gagal membuat file di Drive: " + e.message });
+    console.error("[documents] gagal buat file di Drive:", e);
+    res.status(500).json({ error: "Terjadi kesalahan pada server." });
   }
 });
 
@@ -420,42 +445,51 @@ function filterTablesForRole(tables, role) {
   const out = {};
   for (const [table, rows] of Object.entries(tables)) {
     const title = (SHEET_MAP[table] && SHEET_MAP[table].title) || table;
-    if (allow.some((re) => re.test(title))) out[table] = rows;
+    if (!allow.some((re) => re.test(title))) continue; // tabel tidak diizinkan untuk role ini
+    // Redaksi kolom PII identik dengan filterSheetsForRole: tab penghuni, non-admin.
+    // Baris /api/db berupa objek (kolom→nilai), jadi hapus key yang cocok PII_COLS.
+    if (/penghuni/i.test(title) && role !== "admin" && Array.isArray(rows) && rows.length) {
+      out[table] = rows.map((r) => {
+        if (!r || typeof r !== "object") return r;
+        const o = {};
+        for (const k of Object.keys(r)) if (!PII_COLS.test(k)) o[k] = r[k];
+        return o;
+      });
+    } else {
+      out[table] = rows;
+    }
   }
   return out;
 }
 
 
 /* ---- GET /api/sheets  → data live dari Turso (read-only, cached, di-RLS) ---- */
-app.get("/api/sheets", requireAuth, async (req, res) => {
+app.get("/api/sheets", dataLimiter, requireAuth, async (req, res) => {
   if (!tursoSource.isConfigured()) return res.json({ configured: false, sheets: {} });
   try {
     const sheets = await tursoSource.readComputedSheets();
     res.json({ configured: true, source: "turso", sheets: filterSheetsForRole(sheets, req.user.role) });
   } catch (e) {
-    res.status(502).json({ configured: true, source: "turso", error: "Gagal membaca Turso: " + e.message, sheets: {} });
+    console.error("[api/sheets] gagal baca Turso:", e);
+    res.status(502).json({ configured: true, source: "turso", error: "Terjadi kesalahan pada server.", sheets: {} });
   }
 });
 
 /* ---- GET /api/db  → data Turso terhitung sebagai JSON per tabel (di-RLS) ---- */
-app.get("/api/db", requireAuth, async (req, res) => {
+app.get("/api/db", dataLimiter, requireAuth, async (req, res) => {
   if (!tursoSource.isConfigured()) return res.json({ configured: false, tables: {} });
   try {
     const tables = await tursoSource.readComputedTables();
     res.json({ configured: true, tables: filterTablesForRole(tables, req.user.role) });
   } catch (e) {
-    res.status(502).json({ configured: true, error: "Gagal membaca Turso: " + e.message, tables: {} });
+    console.error("[api/db] gagal baca Turso:", e);
+    res.status(502).json({ configured: true, error: "Terjadi kesalahan pada server.", tables: {} });
   }
 });
 
-/* ---- GET /api/health  → diagnosa konfigurasi (tanpa membocorkan rahasia) ---- */
+/* ---- GET /api/health  → liveness check minimal (tanpa membocorkan konfigurasi backend) ---- */
 app.get("/api/health", async (_req, res) => {
-  res.json({
-    ok: true,
-    clerkConfigured: !!(process.env.CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY),
-    clerkWebhookConfigured: !!process.env.CLERK_WEBHOOK_SIGNING_SECRET,
-    tursoConfigured: tursoSource.isConfigured(),
-  });
+  res.json({ ok: true, ts: Date.now() });
 });
 
 /* ---- static front-end (only /public is exposed) ---- */
